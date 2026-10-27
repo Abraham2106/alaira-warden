@@ -32,16 +32,19 @@ const AGENT_AVATARS = {
   arbiter: "amber", planner: "turquoise", evaluator: "rose", scribe: "blue",
   patchwright: "red", verifier: "amber", guardian: "ink",
 };
+const AGENT_ROLE_ICONS = { warden: "layers", cartographer: "apps", scout: "search", mnemonic: "clock", arbiter: "check", planner: "cases", evaluator: "audit", scribe: "download", patchwright: "patch", verifier: "signal", guardian: "lock" };
 let agentMotionPaused = false;
+const timelineOptions = { attentionOnly: false, order: "recent" };
 function connectorIcon(id) {
   const file = CONNECTOR_ASSETS[id];
-  return file ? `<img class="connector-logo connector-logo-${escapeHTML(id)}" src="/static/assets/connectors/${file}" alt="" width="40" height="40" decoding="async">` : icon("check");
+  return file ? `<img class="connector-logo connector-logo-${escapeHTML(id)}" src="/static/assets/connectors/${file}" alt="" width="20" height="20" decoding="async">` : icon("check");
 }
 function agentAvatar(id, compact = false) {
   const name = AGENT_AVATARS[id] || "ink";
   const still = `/static/assets/agents/${name}-still.svg`;
   const animated = agentMotionPaused ? still : `/static/assets/agents/${name}.svg`;
-  return `<picture class="agent-avatar${compact ? " agent-avatar-compact" : ""}" aria-hidden="true"><source media="(prefers-reduced-motion: reduce)" srcset="${still}"><img src="${animated}" width="56" height="56" alt="" decoding="async"></picture>`;
+  const picture = `<picture class="agent-avatar${compact ? " agent-avatar-compact" : ""}" aria-hidden="true"><source media="(prefers-reduced-motion: reduce)" srcset="${still}"><img src="${animated}" width="${compact ? 36 : 56}" height="${compact ? 36 : 56}" alt="" decoding="async"></picture>`;
+  return compact ? `<span class="agent-portrait">${picture}<span class="agent-role-symbol" aria-hidden="true">${icon(AGENT_ROLE_ICONS[id] || "info")}</span></span>` : picture;
 }
 function motionControl() {
   return `<button class="button" type="button" data-action="toggle-agent-motion" aria-pressed="${agentMotionPaused}">${icon("layers")}${agentMotionPaused ? "Resume avatars" : "Pause avatars"}</button>`;
@@ -125,11 +128,51 @@ const AGENT_STAGE_LABELS = {
   engineering: "Proposed change", validation: "Validation", approval: "Human review",
   synthesis: "Investigation synthesis", closure: "Case closure",
 };
-function activityTime(value) {
-  const instant = new Date(value);
-  if (!value || !Number.isFinite(instant.getTime())) return '<span class="activity-time">Time unavailable</span>';
-  return `<time class="activity-time" datetime="${escapeHTML(instant.toISOString())}" title="${escapeHTML(date(value))}">${escapeHTML(new Intl.DateTimeFormat("en", { hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(instant))}</time>`;
+function activityTime(value, now = Date.now()) {
+  const instant = new Date(value), elapsed = instant.getTime() - now;
+  if (!value || !Number.isFinite(elapsed)) return '<span class="activity-time">Time unavailable</span>';
+  const units = Math.abs(elapsed) < 60000 ? [0, "second"] : Math.abs(elapsed) < 3600000 ? [Math.round(elapsed / 60000), "minute"] : Math.abs(elapsed) < 86400000 ? [Math.round(elapsed / 3600000), "hour"] : [Math.round(elapsed / 86400000), "day"];
+  const relative = units[1] === "second" ? "Just now" : new Intl.RelativeTimeFormat("en", { numeric: "auto" }).format(...units);
+  const exact = new Intl.DateTimeFormat("en", { dateStyle: "medium", timeStyle: "long" }).format(instant);
+  return `<time class="activity-time" datetime="${escapeHTML(instant.toISOString())}" title="${escapeHTML(exact)}">${escapeHTML(relative)}</time>`;
 }
+function activityDay(value) {
+  const day = new Date(value), now = new Date(), yesterday = new Date();
+  yesterday.setDate(now.getDate() - 1);
+  if (!Number.isFinite(day.getTime())) return "Date unavailable";
+  return day.toDateString() === now.toDateString() ? "Today" : day.toDateString() === yesterday.toDateString() ? "Yesterday" : new Intl.DateTimeFormat("en", { month: "short", day: "numeric", year: "numeric" }).format(day);
+}
+const LEGACY_ACTIVITY_MESSAGES = {
+  "Consulta GitHub, OSV, NVD y KEV.": "Querying GitHub, OSV, NVD, and KEV.",
+  "Crítica fail-open. La exposición no cambió.": "Plan critique was unavailable. Exposure was not changed.",
+  "Evidencia persistida.": "Evidence saved.",
+  "Exposición determinista registrada. El modelo no la asigna.": "Deterministic exposure assessment saved. The model does not assign exposure.",
+  "Inventario incompleto o Zetaris falló cerrado.": "Inventory is incomplete or Zetaris could not be verified. Investigation remains blocked.",
+  "Lee el snapshot fijado.": "Reading the pinned inventory snapshot.",
+  "Recall H-MEM listo.": "H-MEM recall is ready.",
+  "Snapshot listo. Entrega al Explorador.": "Inventory snapshot is ready. Handing off to Scout.",
+};
+function activityMessage(event) {
+  return LEGACY_ACTIVITY_MESSAGES[event.summary] || event.summary || "No summary recorded.";
+}
+function activityScope(event) {
+  if (event.run_id) return { key: `run:${event.run_id}`, kind: "run" };
+  if (event.activity_group) return { key: `public:${event.activity_group}`, kind: event.activity_group_kind === "run" ? "run" : "case" };
+  if (event.investigation_id) return { key: `case:${event.investigation_id}`, kind: "case" };
+  const day = String(event.created_at || "unknown").slice(0, 10);
+  return { key: `unscoped:${day}`, kind: "unscoped" };
+}
+function groupActivityByRun(events) {
+  const groups = new Map();
+  const ordered = [...events].sort((a, b) => (Date.parse(a.created_at) || 0) - (Date.parse(b.created_at) || 0));
+  for (const event of ordered) {
+    const scope = activityScope(event);
+    if (!groups.has(scope.key)) groups.set(scope.key, { ...scope, first: event, latest: event, events: [] });
+    const group = groups.get(scope.key); group.events.push(event); group.latest = event;
+  }
+  return [...groups.values()].sort((a, b) => (Date.parse(b.latest.created_at) || 0) - (Date.parse(a.latest.created_at) || 0));
+}
+
 function groupAgentActivity(events) {
   const ordered = events.map((event, index) => ({ ...event, inputOrder: index }))
     .sort((a, b) => (Date.parse(a.created_at) || 0) - (Date.parse(b.created_at) || 0) || a.inputOrder - b.inputOrder);
@@ -138,7 +181,7 @@ function groupAgentActivity(events) {
     if (event.id && seen.has(event.id)) continue;
     if (event.id) seen.add(event.id);
     // Public activity omits case/run IDs: never combine unrelated cases by agent name.
-    const scope = event.run_id || event.investigation_id;
+    const scope = event.run_id || event.investigation_id || event.activity_group;
     const key = scope && `${scope}:${event.agent}:${event.stage}`;
     let group = key && active.get(key);
     if (!group || event.status === "started") {
@@ -150,9 +193,8 @@ function groupAgentActivity(events) {
   }
   return groups.sort((a, b) => (Date.parse(b.latest.created_at) || 0) - (Date.parse(a.latest.created_at) || 0));
 }
-function activityCard(group) {
-  const event = group.latest;
-  const agent = state.crew.find((entry) => entry.id === event.agent);
+function activityCard(group, runKey = "activity") {
+  const event = group.latest, agent = state.crew.find((entry) => entry.id === event.agent);
   const [label, tone] = AGENT_EVENT_STATUS[event.status] || [event.status || "Recorded", "neutral"];
   const stage = AGENT_STAGE_LABELS[event.stage] || event.stage || "Investigation";
   const latestTask = group.tasks?.[0] || group;
@@ -160,21 +202,26 @@ function activityCard(group) {
   const elapsed = started && event.status !== "started" ? Date.parse(event.created_at) - Date.parse(started.created_at) : NaN;
   const duration = Number.isFinite(elapsed) && elapsed >= 0 ? `${(elapsed / 1000).toFixed(1)}s elapsed` : "";
   const synthetic = latestTask.events.some((entry) => entry.synthetic || entry.detail?.synthetic);
+  const taskCount = group.tasks?.length || 1;
+  const scoped = (group.tasks || [group]).every((task) => task.latest.run_id || task.latest.investigation_id || task.latest.activity_group);
+  const workload = scoped ? `${taskCount} ${taskCount === 1 ? "task" : "tasks"}` : `${group.events.length} events`;
   const investigation = state.investigations?.find((entry) => entry.id === event.investigation_id);
-  const caseLink = investigation ? `<button class="text-link activity-case" type="button" data-action="case-detail" data-id="${escapeHTML(investigation.id)}">${escapeHTML(investigation.title)} ${icon("arrow")}</button>` : "";
-  const taskHistory = (group.tasks || [group]).map((task) => {
-    const taskCase = state.investigations?.find((entry) => entry.id === task.latest.investigation_id);
-    const context = taskCase?.title || (task.latest.run_id ? `Run ${String(task.latest.run_id).slice(0, 8)}` : "Recorded activity");
-    const steps = task.events.map((entry) => `<li><span class="activity-step-status">${escapeHTML(AGENT_EVENT_STATUS[entry.status]?.[0] || entry.status)}</span>${activityTime(entry.created_at)}<p>${escapeHTML(entry.summary || "No summary recorded.")}</p></li>`).join("");
+  const caseLink = investigation ? `<button class="text-link activity-case" type="button" data-action="case-detail" data-id="${escapeHTML(investigation.id)}">Open ${escapeHTML(investigation.title)} ${icon("arrow")}</button>` : "";
+  const history = (group.tasks || [group]).map((task) => {
+    const context = task.latest.run_id ? `Run ${String(task.latest.run_id).slice(0, 8)}` : "Recorded case activity";
+    const steps = task.events.map((entry) => {
+      const message = activityMessage(entry);
+      const original = message !== (entry.summary || "") && entry.summary ? `<details class="activity-original"><summary>Original record (source language)</summary><p lang="es">${escapeHTML(entry.summary)}</p></details>` : "";
+      const detail = entry.detail || {};
+      const meta = [typeof detail.model === "string" && `Model: ${detail.model.slice(0, 160)}`, typeof detail.tool === "string" && `Tool: ${detail.tool.slice(0, 80)}`, Number.isInteger(detail.exit_code) && `Exit: ${detail.exit_code}`].filter(Boolean).join(" · ");
+      return `<li><span class="activity-step-status">${escapeHTML(AGENT_EVENT_STATUS[entry.status]?.[0] || entry.status)}</span>${activityTime(entry.created_at)}<p>${escapeHTML(message)}</p>${meta ? `<small>${escapeHTML(meta)}</small>` : ""}${original}</li>`;
+    }).join("");
     return `<section class="activity-task"><h4>${escapeHTML(AGENT_STAGE_LABELS[task.latest.stage] || task.latest.stage || "Investigation")}</h4><span class="activity-task-context">${escapeHTML(context)}</span><ol>${steps}</ol></section>`;
   }).join("");
-  const taskCount = group.tasks?.length || 1;
-  const scopedTasks = (group.tasks || [group]).every((task) => task.latest.run_id || task.latest.investigation_id);
-  const historyLabel = scopedTasks ? `${taskCount} ${taskCount === 1 ? "task" : "tasks"} · ${group.events.length} recorded events` : `${group.events.length} recorded events`;
-
-  return `<li class="activity-item"><details class="activity-agent" data-agent="${escapeHTML(event.agent || "unknown")}"><summary class="activity-row">${agentAvatar(event.agent, true)}<span class="activity-identity"><strong>${escapeHTML(agent?.name || event.agent || "Agent")}${synthetic ? '<span class="activity-sample">Sample</span>' : ""}</strong><span class="activity-stage">${escapeHTML(stage)}</span><span class="activity-preview">${escapeHTML(event.summary || "No summary recorded.")}</span></span><span class="activity-meta"><span class="activity-status activity-status-${tone}">${escapeHTML(label)}</span>${activityTime(event.created_at)}</span><span class="activity-chevron" aria-hidden="true">›</span></summary><div class="activity-history"><div class="activity-history-heading"><span>${historyLabel}</span>${duration ? `<span class="activity-duration">${duration}</span>` : ""}</div>${caseLink}${taskHistory}</div></details></li>`;
-
+  const name = agent?.name || (event.agent ? event.agent[0].toUpperCase() + event.agent.slice(1) : "Agent");
+  return `<li class="activity-item activity-${tone}"><details class="activity-agent" data-agent="${escapeHTML(runKey)}|${escapeHTML(event.agent || "unknown")}"><summary class="activity-row">${agentAvatar(event.agent, true)}<span class="activity-identity"><span class="activity-topline"><strong>${escapeHTML(name)}</strong> <span class="activity-stage">${escapeHTML(stage)}</span> ${activityTime(event.created_at)}</span><span class="activity-preview">${escapeHTML(activityMessage(event))}</span><span class="activity-metadata"><span class="activity-status activity-status-${tone}">${escapeHTML(label)}</span> <span>${workload}</span>${duration ? ` <span>${duration}</span>` : ""}${synthetic ? ' <span class="activity-sample">Sample</span>' : ""}</span></span><span class="activity-expand"><span>View more</span><span class="activity-chevron" aria-hidden="true">⌄</span></span></summary><div class="activity-history"><div class="activity-history-heading">${scoped ? `${taskCount} ${taskCount === 1 ? "task" : "tasks"} · ` : ""}${group.events.length} recorded events</div>${caseLink}${history}</div></details></li>`;
 }
+
 function groupActivityByAgent(events) {
   const agents = new Map();
   for (const task of groupAgentActivity(events)) {
@@ -188,9 +235,23 @@ function groupActivityByAgent(events) {
 }
 function agentTimeline(events) {
   if (!events?.length) return empty("No agent activity yet", "Start an investigation to see evidence collection, decisions, and handoffs here.", "layers", state.authenticated ? "" : button("Connect environment", "connect", "plug", true));
-  const agents = groupActivityByAgent(events);
-  const eventCount = agents.reduce((count, agent) => count + agent.events.length, 0);
-  return `<div class="activity-overview"><span>${agents.length} ${agents.length === 1 ? "agent" : "agents"} · ${eventCount} events</span><span>Most recent</span></div><ol class="activity-timeline" aria-label="One entry per agent, latest activity first">${agents.map(activityCard).join("")}</ol>`;
+  let runs = groupActivityByRun(events).map((run) => ({ ...run, agents: groupActivityByAgent(run.events) }));
+  const attention = runs.reduce((count, run) => count + run.agents.filter((agent) => ["blocked", "failed"].includes(agent.latest.status)).length, 0);
+  const uniqueAgents = new Set(events.map((event) => event.agent)).size;
+  if (timelineOptions.order === "oldest") runs.reverse();
+  let lastDay = "";
+  const markup = runs.map((run, index) => {
+    let agents = run.agents;
+    if (timelineOptions.attentionOnly) agents = agents.filter((agent) => ["blocked", "failed"].includes(agent.latest.status));
+    if (!agents.length) return "";
+    agents.sort((a, b) => (Date.parse(a.first.created_at) || 0) - (Date.parse(b.first.created_at) || 0));
+    const day = activityDay(run.first.created_at), dayLabel = day !== lastDay ? `<h3 class="activity-day">${escapeHTML(day)}</h3>` : ""; lastDay = day;
+    const stamp = new Date(run.first.created_at);
+    const clock = Number.isFinite(stamp.getTime()) ? new Intl.DateTimeFormat("en", { hour: "2-digit", minute: "2-digit", hour12: false }).format(stamp) : "";
+    const label = run.kind === "run" ? `Run ${clock}` : run.kind === "case" ? `Case activity ${clock}` : "Activity without a run reference";
+    return `${dayLabel}<details class="activity-run" data-run="${escapeHTML(run.key)}"${index === 0 || timelineOptions.attentionOnly ? " open" : ""}><summary class="activity-run-heading"><span><strong>${escapeHTML(label)}</strong> <span>${run.agents.length} ${run.agents.length === 1 ? "agent" : "agents"} · ${run.events.length} events</span></span>${activityTime(run.latest.created_at)}<span class="activity-chevron" aria-hidden="true">⌄</span></summary><ol class="activity-timeline" aria-label="Agents within this activity group">${agents.map((agent) => activityCard(agent, run.key)).join("")}</ol></details>`;
+  }).join("");
+  return `<div class="activity-toolbar"><div class="activity-count">${uniqueAgents} ${uniqueAgents === 1 ? "agent" : "agents"} · ${events.length} events</div><label class="activity-sort">Order <select data-timeline-sort aria-label="Activity order"><option value="recent"${timelineOptions.order === "recent" ? " selected" : ""}>Most recent</option><option value="oldest"${timelineOptions.order === "oldest" ? " selected" : ""}>Oldest first</option></select></label></div><div class="activity-filters"><button type="button" data-action="timeline-attention" aria-pressed="${timelineOptions.attentionOnly}" class="activity-filter${timelineOptions.attentionOnly ? " selected" : ""}">Needs attention <span>(${attention})</span></button></div><div class="activity-groups">${markup || '<p class="activity-empty">No agents need attention in this activity window.</p>'}</div>`;
 }
 
 function panorama() {
@@ -313,9 +374,13 @@ function render() {
   const views = { overview, agents: agentsPage, applications: () => applicationsPage(current.id, current.tab), integrations: integrationsPage, settings: settingsPage };
   const view = $("view");
   const expandedAgents = new Set([...(view.querySelectorAll?.("details.activity-agent[open]") || [])].map((entry) => entry.dataset.agent));
+  const priorRuns = new Map([...(view.querySelectorAll?.("details.activity-run") || [])].map((entry) => [entry.dataset.run, entry.open]));
   view.innerHTML = views[current.page]();
   for (const entry of view.querySelectorAll?.("details.activity-agent") || []) {
     if (expandedAgents.has(entry.dataset.agent)) entry.open = true;
+  }
+  for (const entry of view.querySelectorAll?.("details.activity-run") || []) {
+    if (priorRuns.has(entry.dataset.run)) entry.open = priorRuns.get(entry.dataset.run);
   }
   $("view").setAttribute("aria-busy", String(state.loading));
 }
@@ -426,6 +491,7 @@ async function loadCaseExtras(item, sequence = refreshSequence) {
 function helpDialog() { openModal("About Warden", `<p>Investigate advisories, assess exposure, and review proposed responses in one case. Models propose; evidence and deterministic checks support conclusions.</p>${note("Sample mode", "Creates a labeled synthetic application and investigation in this workspace. It does not contact Nightshift, Zetaris, or NVIDIA, and does not prove those integrations.")}<div class="dialog-actions">${button("Create sample investigation", "sample-run", "signal")}${button("Close", "close-modal", "", true)}</div>`); }
 
 async function performAction(action, target) {
+  if (action === "timeline-attention") { timelineOptions.attentionOnly = !timelineOptions.attentionOnly; render(); $("view").querySelector('[data-action="timeline-attention"]')?.focus(); return; }
   if (action === "toggle-agent-motion") { agentMotionPaused = !agentMotionPaused; render(); return; }
   if (NAV.some((item) => item[0] === action)) { navigate(action); return; }
   if (action === "connect") connectionDialog();
@@ -564,6 +630,12 @@ document.addEventListener("click", (event) => {
     });
   }
   if (event.target.closest(".nav-item")) closeNavigation();
+});
+document.addEventListener("change", (event) => {
+  if (event.target.matches("[data-timeline-sort]")) {
+    timelineOptions.order = event.target.value === "oldest" ? "oldest" : "recent";
+    render(); $("view").querySelector("[data-timeline-sort]")?.focus();
+  }
 });
 document.addEventListener("input", (event) => {
   if (event.target.validity?.valid) event.target.removeAttribute("aria-invalid");

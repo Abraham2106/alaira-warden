@@ -13,6 +13,13 @@ def test_local_avatars_have_scoped_csp_and_no_active_content():
     page_policy = client.get("/").headers["content-security-policy"]
     assert "'unsafe-inline'" not in page_policy
     assert "sha256-" not in page_policy
+    page = client.get("/")
+    assert page.headers["cache-control"] == "no-cache"
+    assert "/static/activity.css?v=" in page.text
+    for asset in ("app.css", "activity.css", "app.js"):
+        response = client.get(f"/static/{asset}")
+        assert response.status_code == 200
+        assert response.headers["cache-control"] == "no-cache"
     for path in (STATIC / "assets" / "agents").glob("*.svg"):
         response = client.get(f"/static/assets/agents/{path.name}")
         assert response.status_code == 200

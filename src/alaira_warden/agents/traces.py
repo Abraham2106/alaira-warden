@@ -1,5 +1,8 @@
 """Append-only agent timeline. Summaries never include secrets."""
 
+import hashlib
+import hmac
+import secrets
 from datetime import datetime
 from uuid import UUID, uuid4
 
@@ -9,6 +12,7 @@ from alaira_warden.agents.roster import require_agent
 from alaira_warden.db import connect
 
 _STATUSES = frozenset({"started", "decided", "handed_off", "failed", "skipped", "blocked"})
+_PUBLIC_GROUP_SALT = secrets.token_bytes(32)
 
 
 def public_row(row) -> dict:
@@ -88,8 +92,14 @@ def recent(settings, *, limit: int = 40) -> list[dict]:
 def public_recent(settings, *, limit: int = 40) -> list[dict]:
     """Unauthenticated timeline: acts only, no investigation identifiers."""
     events = []
+    pepper = settings.warden_identity_pepper.get_secret_value()
+    group_key = pepper.encode() if pepper else _PUBLIC_GROUP_SALT
     for row in recent(settings, limit=limit):
         detail = row.get("detail") or {}
+        kind = "run" if row.get("run_id") else "case"
+        scope = row.get("run_id") or row["investigation_id"]
+        # Permit grouping without publishing internal case, run or application IDs.
+        opaque_group = hmac.new(group_key, f"{kind}:{scope}".encode(), hashlib.sha256).hexdigest()
         events.append(
             {
                 "agent": row["agent"],
@@ -98,6 +108,8 @@ def public_recent(settings, *, limit: int = 40) -> list[dict]:
                 "summary": row["summary"],
                 "created_at": row["created_at"],
                 "synthetic": bool(detail.get("synthetic")),
+                "activity_group": opaque_group[:24],
+                "activity_group_kind": kind,
             }
         )
     return events

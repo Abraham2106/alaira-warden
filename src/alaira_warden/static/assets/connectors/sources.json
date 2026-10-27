@@ -1,0 +1,50 @@
+[
+  {
+    "file": "nvidia.svg",
+    "source": "https://raw.githubusercontent.com/simple-icons/simple-icons/develop/icons/nvidia.svg",
+    "kind": "brand",
+    "license": "CC0-1.0; trademark rights retained"
+  },
+  {
+    "file": "osv.png",
+    "source": "https://osv.dev/static/img/logo.png",
+    "kind": "brand",
+    "license": "Official brand asset; trademark rights retained"
+  },
+  {
+    "file": "nvd.ico",
+    "source": "https://nvd.nist.gov/favicon.ico",
+    "kind": "brand",
+    "license": "Official brand asset; trademark rights retained"
+  },
+  {
+    "file": "syft.svg",
+    "source": "https://anchore.com/wp-content/uploads/2024/11/syft-logo.svg",
+    "kind": "brand",
+    "license": "Official brand asset; trademark rights retained"
+  },
+  {
+    "file": "trivy.png",
+    "source": "https://trivy.dev/assets/images/favicon_192x192.png",
+    "kind": "brand",
+    "license": "Official brand asset; trademark rights retained"
+  },
+  {
+    "file": "meterless.svg",
+    "source": "https://meterless.ai/meterless-icon.svg",
+    "kind": "brand",
+    "license": "Official brand asset; trademark rights retained"
+  },
+  {
+    "file": "zetaris.svg",
+    "source": "https://www.zetaris.com/hubfs/raw_assets/public/zetaris-bold/images/logo/zetaris-logo-indigo.svg",
+    "kind": "brand",
+    "license": "Official brand asset; trademark rights retained"
+  },
+  {
+    "file": "github.svg",
+    "source": "https://raw.githubusercontent.com/simple-icons/simple-icons/develop/icons/github.svg",
+    "kind": "brand",
+    "license": "CC0-1.0; trademark rights retained"
+  }
+]

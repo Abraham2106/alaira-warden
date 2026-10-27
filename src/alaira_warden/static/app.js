@@ -22,6 +22,30 @@ const ICONS = {
   layers: "m12 3 10 5-10 5L2 8z M2 12l10 5 10-5 M2 16l10 5 10-5",
 };
 const icon = (name) => `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="${ICONS[name] || ICONS.info}"/></svg>`;
+const CONNECTOR_ASSETS = {
+  github: "github.svg", osv: "osv.png", "osv-scanner": "osv.png", nvd: "nvd.ico",
+  syft: "syft.svg", trivy: "trivy.png", meterless: "meterless.svg", hmem: "meterless.svg",
+  nvidia: "nvidia.svg", zetaris: "zetaris.svg",
+};
+const AGENT_AVATARS = {
+  warden: "ink", cartographer: "turquoise", scout: "blue", mnemonic: "rose",
+  arbiter: "amber", planner: "turquoise", evaluator: "rose", scribe: "blue",
+  patchwright: "red", verifier: "amber", guardian: "ink",
+};
+let agentMotionPaused = false;
+function connectorIcon(id) {
+  const file = CONNECTOR_ASSETS[id];
+  return file ? `<img class="connector-logo connector-logo-${escapeHTML(id)}" src="/static/assets/connectors/${file}" alt="" width="40" height="40" decoding="async">` : icon("check");
+}
+function agentAvatar(id, compact = false) {
+  const name = AGENT_AVATARS[id] || "ink";
+  const still = `/static/assets/agents/${name}-still.svg`;
+  const animated = agentMotionPaused ? still : `/static/assets/agents/${name}.svg`;
+  return `<picture class="agent-avatar${compact ? " agent-avatar-compact" : ""}" aria-hidden="true"><source media="(prefers-reduced-motion: reduce)" srcset="${still}"><img src="${animated}" width="56" height="56" alt="" decoding="async"></picture>`;
+}
+function motionControl() {
+  return `<button class="button" type="button" data-action="toggle-agent-motion" aria-pressed="${agentMotionPaused}">${icon("layers")}${agentMotionPaused ? "Resume avatars" : "Pause avatars"}</button>`;
+}
 const NAV = [
   ["overview", "Operations center", "overview", "OPERATIONS"],
   ["applications", "Applications", "apps"],
@@ -90,17 +114,70 @@ function accessEmpty(type = "investigations") {
   if (!state.authenticated) return empty(isApp ? "Learn your environment" : "Your next investigation starts here", isApp ? "Connect your environment to register applications and prepare inventory." : "Connect the environment to collect advisories that need review.", isApp ? "apps" : "cases", button("Connect environment", "connect", "plug", true));
   return empty(isApp ? "Add your first application" : "No investigations yet", isApp ? "Register a repository to start building security context." : "Register a manual advisory and link it to an application.", isApp ? "apps" : "cases", button(isApp ? "Register application" : "New investigation", isApp ? "new-app" : "new-case", "plus", true));
 }
-function agentTimeline(events) {
-  if (!events?.length) return empty("Agents have not acted yet", "Start an investigation run to record activity here.", "layers", state.authenticated ? "" : button("Connect environment", "connect", "plug", true));
-  return `<ol class="agent-timeline">${events.map((event) => `<li class="agent-event ${escapeHTML(event.status)}"><div><strong>${escapeHTML((state.crew.find((item) => item.id === event.agent) || { name: event.agent }).name)}</strong><small>${escapeHTML(event.stage)} · ${escapeHTML(event.status)}</small></div><p>${escapeHTML(event.summary)}</p><time>${escapeHTML(date(event.created_at))}</time></li>`).join("")}</ol>`;
+const AGENT_EVENT_STATUS = {
+  started: ["Started", "running"], decided: ["Decision recorded", "complete"],
+  handed_off: ["Handed off", "complete"], failed: ["Failed", "error"],
+  skipped: ["Skipped", "neutral"], blocked: ["Needs attention", "attention"],
+};
+const AGENT_STAGE_LABELS = {
+  inventory: "Inventory", sources: "Evidence collection", correlation: "Exposure assessment",
+  memory: "Memory recall", plan: "Response planning", critique: "Plan review",
+  engineering: "Proposed change", validation: "Validation", approval: "Human review",
+  synthesis: "Investigation synthesis", closure: "Case closure",
+};
+function activityTime(value) {
+  const instant = new Date(value);
+  if (!value || !Number.isFinite(instant.getTime())) return '<span class="activity-time">Time unavailable</span>';
+  return `<time class="activity-time" datetime="${escapeHTML(instant.toISOString())}" title="${escapeHTML(date(value))}">${escapeHTML(new Intl.DateTimeFormat("en", { hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(instant))}</time>`;
 }
+function groupAgentActivity(events) {
+  const ordered = events.map((event, index) => ({ ...event, inputOrder: index }))
+    .sort((a, b) => (Date.parse(a.created_at) || 0) - (Date.parse(b.created_at) || 0) || a.inputOrder - b.inputOrder);
+  const groups = [], active = new Map(), seen = new Set();
+  for (const event of ordered) {
+    if (event.id && seen.has(event.id)) continue;
+    if (event.id) seen.add(event.id);
+    // Public activity omits case/run IDs: never combine unrelated cases by agent name.
+    const scope = event.run_id || event.investigation_id;
+    const key = scope && `${scope}:${event.agent}:${event.stage}`;
+    let group = key && active.get(key);
+    if (!group || event.status === "started") {
+      group = { events: [], first: event, latest: event };
+      groups.push(group);
+      if (key) active.set(key, group);
+    }
+    group.events.push(event); group.latest = event;
+  }
+  return groups.sort((a, b) => (Date.parse(b.latest.created_at) || 0) - (Date.parse(a.latest.created_at) || 0));
+}
+function activityCard(group) {
+  const event = group.latest;
+  const agent = state.crew.find((entry) => entry.id === event.agent);
+  const [label, tone] = AGENT_EVENT_STATUS[event.status] || [event.status || "Recorded", "neutral"];
+  const stage = AGENT_STAGE_LABELS[event.stage] || event.stage || "Investigation";
+  const started = group.events.find((entry) => entry.status === "started");
+  const elapsed = started && event.status !== "started" ? Date.parse(event.created_at) - Date.parse(started.created_at) : NaN;
+  const duration = Number.isFinite(elapsed) && elapsed >= 0 ? `${(elapsed / 1000).toFixed(1)}s elapsed` : "";
+  const synthetic = group.events.some((entry) => entry.synthetic || entry.detail?.synthetic);
+  const investigation = state.investigations?.find((entry) => entry.id === event.investigation_id);
+  const caseLink = investigation ? `<button class="text-link activity-case" type="button" data-action="case-detail" data-id="${escapeHTML(investigation.id)}">${escapeHTML(investigation.title)} ${icon("arrow")}</button>` : "";
+  const steps = group.events.map((entry) => `<li><span class="activity-step-status">${escapeHTML(AGENT_EVENT_STATUS[entry.status]?.[0] || entry.status)}</span>${activityTime(entry.created_at)}<p>${escapeHTML(entry.summary || "No summary recorded.")}</p></li>`).join("");
+  return `<li class="activity-item"><article class="activity-card activity-${tone}"><header class="activity-card-header">${agentAvatar(event.agent, true)}<div class="activity-identity"><strong>${escapeHTML(agent?.name || event.agent || "Agent")}</strong><span>${escapeHTML(stage)}</span></div>${activityTime(event.created_at)}</header><div class="activity-content"><div class="activity-state"><span class="activity-status activity-status-${tone}">${icon(tone === "error" || tone === "attention" ? "info" : tone === "running" ? "clock" : "check")}${escapeHTML(label)}</span>${synthetic ? badge("Synthetic sample", "sand") : ""}${duration ? `<span class="activity-duration">${duration}</span>` : ""}</div><p class="activity-summary">${escapeHTML(event.summary || "No summary recorded.")}</p>${caseLink}${group.events.length > 1 ? `<details class="activity-details"><summary>${group.events.length} recorded events</summary><ol>${steps}</ol></details>` : ""}</div></article></li>`;
+}
+function agentTimeline(events) {
+  if (!events?.length) return empty("No agent activity yet", "Start an investigation to see evidence collection, decisions, and handoffs here.", "layers", state.authenticated ? "" : button("Connect environment", "connect", "plug", true));
+  const groups = groupAgentActivity(events);
+  const list = (entries) => `<ol class="activity-timeline" aria-label="Agent activity, newest first">${entries.map(activityCard).join("")}</ol>`;
+  return `<div class="activity-overview"><span>${groups.length} ${groups.length === 1 ? "task" : "tasks"} · ${events.length} recorded events</span><span>Newest first</span></div>${list(groups.slice(0, 8))}${groups.length > 8 ? `<details class="activity-earlier"><summary>Show ${groups.length - 8} earlier tasks</summary>${list(groups.slice(8))}</details>` : ""}`;
+}
+
 function panorama() {
   const cases = state.investigations;
   const events = state.activity?.length ? state.activity : (state.context?.agents || []);
-  return heading("Agents investigate. You decide.", "Eleven roles, stateful orchestration, and no model conclusion treated as evidence.", button("Refresh", "refresh", "refresh") + button("New investigation", "new-case", "plus", true)) + operationViews() +
+  return heading("Agents investigate. You decide.", "Eleven roles, stateful orchestration, and no model conclusion treated as evidence.", motionControl() + button("Refresh", "refresh", "refresh") + button("New investigation", "new-case", "plus", true)) + operationViews() +
     `<div class="metrics">${metric("Registered applications", count(state.applications), state.applications ? "In workspace" : "Connect your environment", "apps")}${metric("Investigations", count(cases), cases ? "Advisories recorded" : "No environment data", "cases")}${metric("Confirmed exposure", cases ? String(cases.filter((item) => item.exposure === "confirmed").length) : "—", cases ? "Per deterministic correlation" : '<span class="tiny-dot"></span>No environment data', "check")}${metric("Data layer", state.context?.data_layer === "zetaris" ? "Zetaris" : cases ? "Local" : "—", state.context?.sponsor_data_layer_verified ? "Zetaris read verified" : "Local mode does not attest the sponsor", "layers")}</div>` +
-    `<div class="content-grid"><div>${panel("Crew timeline", agentTimeline(events), badge(events.length ? `${events.length} acts` : "Live"), "Warden orchestrates. The Arbiter classifies. Nightshift proposes. Merge is prohibited.")}${panel("Recent investigations", cases?.length ? table(["Investigation", "Status", "Exposure", ""], caseRows(cases.slice(0, 5))) : accessEmpty(), `<button type="button" class="text-link" data-action="operation-view" data-view="case">Open investigation ${icon("arrow")}</button>`)}</div><aside class="overview-aside">${flowPanel()}</aside></div>` +
-    `<div class="bottom-sources"><span>Intelligence sources</span>${CATALOG.slice(0, 4).map((item) => `<a href="#integrations" class="source-chip"><span class="source-icon">${item.mark}</span>${item.name}<span class="status-dot" title="View integration status"></span></a>`).join("")}<a class="text-link" href="#integrations">View integrations ${icon("arrow")}</a></div>`;
+    `<div class="content-grid"><div>${panel("Crew timeline", agentTimeline(events), badge(events.length ? `${events.length} events` : "No activity"), "Warden orchestrates. The Arbiter classifies. Nightshift proposes. Merge is prohibited.")}${panel("Recent investigations", cases?.length ? table(["Investigation", "Status", "Exposure", ""], caseRows(cases.slice(0, 5))) : accessEmpty(), `<button type="button" class="text-link" data-action="operation-view" data-view="case">Open investigation ${icon("arrow")}</button>`)}</div><aside class="overview-aside">${flowPanel()}</aside></div>` +
+    `<div class="bottom-sources"><span>Intelligence sources</span>${CATALOG.slice(0, 4).map((item) => `<a href="#integrations" class="source-chip"><span class="source-icon">${connectorIcon(item.id)}</span>${item.name}<span class="status-dot" title="View integration status"></span></a>`).join("")}<a class="text-link" href="#integrations">View integrations ${icon("arrow")}</a></div>`;
 }
 function operationViews() {
   return `<div class="operation-views"><div class="view-presets" aria-label="Operations center view"><button type="button" data-action="operation-view" data-view="panorama" class="view-preset${state.operationView === "panorama" ? " active" : ""}" aria-pressed="${state.operationView === "panorama"}">${icon("overview")}Overview</button><button type="button" data-action="operation-view" data-view="case" class="view-preset${state.operationView === "case" ? " active" : ""}" aria-pressed="${state.operationView === "case"}">${icon("cases")}Investigation and response</button><button type="button" data-action="operation-view" data-view="crew" class="view-preset${state.operationView === "crew" ? " active" : ""}" aria-pressed="${state.operationView === "crew"}">${icon("layers")}Crew</button></div></div>`;
@@ -148,12 +225,12 @@ function operationsCase() {
   const history = `<section class="case-block history-block"><div class="case-block-heading"><h3>${icon("clock")}History and traceability</h3>${badge(runs.length ? "Runs" : "Partial query")}</div><div class="case-block-body">${item ? `<ul class="timeline"><li>Advisory recorded<small>${escapeHTML(date(item.created_at))} · persisted record</small></li>${latestRun ? `<li>Last run ${escapeHTML(latestRun.status)}<small>${escapeHTML(date(latestRun.updated_at))}</small></li>` : ""}</ul>` : '<p>Actions will appear here once an investigation exists.</p>'}</div></section>`;
   const actions = item ? `<div class="page-actions">${button("Refresh", "refresh", "refresh")}${button("New investigation", "new-case", "plus", true)}</div>` : button("New investigation", "new-case", "plus", true);
   const crewLog = `<section class="case-block history-block"><div class="case-block-heading"><h3>${icon("layers")}Agent acts</h3>${badge((ctx?.agents || []).length ? String(ctx.agents.length) : "0")}</div><div class="case-block-body">${agentTimeline(ctx?.agents || [])}</div></section>`;
-  return heading("Crew investigation", "Every act has an owner, tool, and decision. Merge remains prohibited.", actions) + operationViews() + `<div class="operations-layout">${queue}<article class="case-workspace"><div class="case-workspace-heading"><div><span class="case-eyebrow">SELECTED INVESTIGATION</span><h2>${escapeHTML(item?.title || "Choose an investigation to begin")}</h2></div>${item ? "" : badge("Not selected")}</div>${state.contextError ? note("Investigation details unavailable", state.contextError) : ""}${sampleNotice}${context}<div class="case-intelligence-grid">${evidence}${exposure}</div><div class="case-intelligence-grid">${runPanel}${memoryPanel}</div>${crewLog}<div class="response-flow-heading"><h2>Response flow</h2><span>No pull request recorded</span></div><div class="response-flow">${plan}${patch}${validation}${approval}</div>${history}</article></div>`;
+  return heading("Crew investigation", "Every act has an owner, tool, and decision. Merge remains prohibited.", motionControl() + actions) + operationViews() + `<div class="operations-layout">${queue}<article class="case-workspace"><div class="case-workspace-heading"><div><span class="case-eyebrow">SELECTED INVESTIGATION</span><h2>${escapeHTML(item?.title || "Choose an investigation to begin")}</h2></div>${item ? "" : badge("Not selected")}</div>${state.contextError ? note("Investigation details unavailable", state.contextError) : ""}${sampleNotice}${context}<div class="case-intelligence-grid">${evidence}${exposure}</div><div class="case-intelligence-grid">${runPanel}${memoryPanel}</div>${crewLog}<div class="response-flow-heading"><h2>Response flow</h2><span>No pull request recorded</span></div><div class="response-flow">${plan}${patch}${validation}${approval}</div>${history}</article></div>`;
 }
 function agentsPage() {
   const crew = state.crew || [];
-  const roster = crew.length ? `<div class="integration-grid">${crew.map((agent) => `<article class="integration-card"><div class="integration-card-header"><span class="integration-symbol">${escapeHTML(agent.id.slice(0, 2).toUpperCase())}</span><div><h3>${escapeHTML(agent.name)}</h3><small>${escapeHTML(agent.role)}</small></div></div><p>${escapeHTML(agent.mission)}</p><p><strong>Decides:</strong> ${escapeHTML(agent.decides)}</p><p><strong>Never:</strong> ${escapeHTML(agent.never)}</p><div class="integration-card-footer">${(agent.tools || []).map((tool) => badge(tool)).join(" ")}</div></article>`).join("")}</div>` : empty("Loading crew", "The public roster does not require a token. Retry if the API is still starting.", "layers", button("Refresh", "refresh", "refresh"));
-  return heading("Crew", "Specialist responsibilities and recorded investigation activity.") + operationViews() +
+  const roster = crew.length ? `<div class="integration-grid">${crew.map((agent) => `<article class="integration-card"><div class="integration-card-header">${agentAvatar(agent.id)}<div><h3>${escapeHTML(agent.name)}</h3><small>${escapeHTML(agent.role)}</small></div></div><p>${escapeHTML(agent.mission)}</p><p><strong>Decides:</strong> ${escapeHTML(agent.decides)}</p><p><strong>Never:</strong> ${escapeHTML(agent.never)}</p><div class="integration-card-footer">${(agent.tools || []).map((tool) => badge(tool)).join(" ")}</div></article>`).join("")}</div>` : empty("Loading crew", "The public roster does not require a token. Retry if the API is still starting.", "layers", button("Refresh", "refresh", "refresh"));
+  return heading("Crew", "Specialist responsibilities and recorded investigation activity.", motionControl()) + operationViews() +
     roster +
     panel("Live activity", agentTimeline(state.activity || []), badge(state.activity?.length ? String(state.activity.length) : "0"), "Each act has agent, stage, decision, and timestamp. The log is append-only.");
 }
@@ -195,7 +272,7 @@ function integrationsPage() {
       const live = state.integrations?.find((entry) => entry.id === item.id);
       const verified = live?.verified === true;
       const status = live?.status || item.status;
-      return `<article class="integration-card"><div class="integration-card-header"><span class="integration-symbol">${item.mark}</span><div><h3>${item.name}</h3><small>${scopes[item.scope] || item.scope}</small></div></div><p>${item.description}</p><div class="integration-card-footer">${badge(verified ? "Verified" : status === "implemented_unverified" ? "Connected, unverified" : status === "not_implemented" ? "Unavailable" : "Unverified", verified ? "green" : "sand")}<span class="muted">${live?.verified_operation ? escapeHTML(live.verified_operation) : live?.auth?.configured ? "Configured" : live?.auth?.mode === "none" ? "No credential" : "Unverified"}</span></div>${["meterless", "zetaris", "hmem"].includes(item.id) ? `<div class="case-actions"><button type="button" class="button" data-action="check-integration" data-id="${escapeHTML(item.id)}">${icon("check")}Check</button></div>` : ""}</article>`;
+      return `<article class="integration-card"><div class="integration-card-header"><span class="integration-symbol connector-symbol">${connectorIcon(item.id)}</span><div><h3>${item.name}</h3><small>${scopes[item.scope] || item.scope}</small></div></div><p>${item.description}</p><div class="integration-card-footer">${badge(verified ? "Verified" : status === "implemented_unverified" ? "Connected, unverified" : status === "not_implemented" ? "Unavailable" : "Unverified", verified ? "green" : "sand")}<span class="muted">${live?.verified_operation ? escapeHTML(live.verified_operation) : live?.auth?.configured ? "Configured" : live?.auth?.mode === "none" ? "No credential" : "Unverified"}</span></div>${["meterless", "zetaris", "hmem"].includes(item.id) ? `<div class="case-actions"><button type="button" class="button" data-action="check-integration" data-id="${escapeHTML(item.id)}">${icon("check")}Check</button></div>` : ""}</article>`;
     }).join("")}</div>`;
 }
 function settingRow(name, description, value) { return `<div class="settings-row"><div><h3>${escapeHTML(name)}</h3><p>${escapeHTML(description)}</p></div><div class="setting-value">${value}</div></div>`; }
@@ -322,6 +399,7 @@ async function loadCaseExtras(item, sequence = refreshSequence) {
 function helpDialog() { openModal("About Warden", `<p>Investigate advisories, assess exposure, and review proposed responses in one case. Models propose; evidence and deterministic checks support conclusions.</p>${note("Sample mode", "Creates a labeled synthetic application and investigation in this workspace. It does not contact Nightshift, Zetaris, or NVIDIA, and does not prove those integrations.")}<div class="dialog-actions">${button("Create sample investigation", "sample-run", "signal")}${button("Close", "close-modal", "", true)}</div>`); }
 
 async function performAction(action, target) {
+  if (action === "toggle-agent-motion") { agentMotionPaused = !agentMotionPaused; render(); return; }
   if (NAV.some((item) => item[0] === action)) { navigate(action); return; }
   if (action === "connect") connectionDialog();
   if (action === "help") helpDialog();

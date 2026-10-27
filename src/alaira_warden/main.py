@@ -1,3 +1,6 @@
+import base64
+import hashlib
+import xml.etree.ElementTree as ET
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated
@@ -35,6 +38,17 @@ from alaira_warden.repository import Repository
 from alaira_warden.workflow import build_workflow
 
 STATIC = Path(__file__).parent / "static"
+
+# Only the supplied SVG style blocks may animate; the page still rejects inline CSS.
+AVATAR_STYLE_HASHES = {
+    f"/static/assets/agents/{path.name}": " ".join(
+        "'sha256-"
+        + base64.b64encode(hashlib.sha256((node.text or "").encode()).digest()).decode()
+        + "'"
+        for node in ET.parse(path).getroot().iter("{http://www.w3.org/2000/svg}style")
+    )
+    for path in (STATIC / "assets" / "agents").glob("*.svg")
+}
 
 
 def get_repository(request: Request) -> Repository:
@@ -169,8 +183,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "no-referrer"
         if request.url.path == "/" or request.url.path.startswith("/static/"):
+            avatar_styles = AVATAR_STYLE_HASHES.get(request.url.path, "")
             response.headers["Content-Security-Policy"] = (
-                "default-src 'self'; script-src 'self'; style-src 'self'; "
+                f"default-src 'self'; script-src 'self'; style-src 'self' {avatar_styles}; "
                 "connect-src 'self'; img-src 'self'; object-src 'none'; "
                 "base-uri 'self'; frame-ancestors 'none'; form-action 'self'"
             )

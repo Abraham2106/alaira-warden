@@ -68,11 +68,13 @@ def test_healthz_url_uses_the_documented_contract():
         healthz_url("127.0.0.1:8088")
 
 
-def test_deployment_flag_requires_the_requested_meterless_id():
+def test_deployment_flag_accepts_nightshift_resolved_models():
     ok = ModelResult(provider="meterless", model="meterless/auto", text="pong")
-    other = ModelResult(provider="meterless", model="meterless/local", text="pong")
+    routed = ModelResult(provider="meterless", model="nvidia/nemotron-3.5-bolt-e4b", text="pong")
+    nvidia_direct = ModelResult(provider="nvidia", model="nvidia/nemotron", text="pong")
     assert deployment_verified(ok, "meterless/auto") is True
-    assert deployment_verified(other, "meterless/auto") is False
+    assert deployment_verified(routed, "meterless/auto") is True
+    assert deployment_verified(nvidia_direct, "meterless/auto") is False
     assert deployment_verified(ok, "") is False
 
 
@@ -154,11 +156,11 @@ def test_generation_is_verified_only_when_the_runtime_echoes_the_model():
     assert body["model"] == "meterless/auto"
 
 
-def test_a_substituted_model_does_not_verify():
+def test_nightshift_may_resolve_auto_to_nemotron():
     transport = Scripted(
         [
             response(200, models(["meterless/auto"])),
-            response(200, chat("nvidia/nemotron")),
+            response(200, chat("nvidia/nemotron-3.5-bolt-e4b")),
         ]
     )
     report = prove_nightshift(
@@ -168,9 +170,10 @@ def test_a_substituted_model_does_not_verify():
         transport=transport,
         clock=lambda: NOW,
     )
-    assert report["verified"] is False
-    assert report["nightshift_deployment_verified"] is False
-    assert report["status"] == "invalid_response"
+    assert report["verified"] is True
+    assert report["nightshift_deployment_verified"] is True
+    assert report["returned_model"] == "nvidia/nemotron-3.5-bolt-e4b"
+    assert report["nvidia_direct"] is False
 
 
 def test_wait_accepts_only_healthz_200():

@@ -236,16 +236,15 @@ def test_meterless_generation_keeps_usage_and_rejects_substitution():
     assert body["max_tokens"] == 16
     assert body["stream"] is False
     assert "tools" not in body
+    assert "response_format" not in body
     assert transport.calls[0].headers["meterless-scope"] == "user"
 
     swapped = Scripted([response(200, chat("pong", model="meterless/fast"))])
-    with pytest.raises(ProviderError, match="different model") as exc:
-        meterless(swapped).generate_text(
-            model="meterless/auto", prompt="Reply with pong.", max_output_tokens=16, timeout=5
-        )
-    assert len(swapped.calls) == 1
+    routed = meterless(swapped).generate_text(
+        model="meterless/auto", prompt="Reply with pong.", max_output_tokens=16, timeout=5
+    )
+    assert routed.model == "meterless/fast"
     assert json.loads(swapped.calls[0].body.decode())["model"] == "meterless/auto"
-    assert_clean(str(exc.value))
 
     with pytest.raises(ProviderError, match="not replaced") as exc:
         meterless(Scripted([])).generate_text(
@@ -341,6 +340,10 @@ def test_structured_output_rejects_foreign_references_exposure_and_tools():
     assert result.structured_output["references"] == ["e1"]
     assert result.usage is None
     assert "exposure" not in result.structured_output
+    request = json.loads(transport.calls[0].body.decode())
+    assert request["response_format"] == {"type": "json_object"}
+    assert request["messages"][0]["role"] == "system"
+    assert request["messages"][-1]["role"] == "user"
 
     foreign = dict(good, references=["https://evil.example/advisory"])
     bad = Scripted([response(200, chat(json.dumps(foreign), model="meterless/auto"))])
@@ -632,6 +635,17 @@ def test_chat_body_has_a_finite_token_budget():
         messages=[{"role": "user", "content": "ping"}],
         max_output_tokens=32,
     )
-    assert json.loads(encoded)["max_tokens"] == 32
+    payload = json.loads(encoded)
+    assert payload["max_tokens"] == 32
+    assert "response_format" not in payload
+    forced = json.loads(
+        chat_body(
+            model="meterless/auto",
+            messages=[{"role": "user", "content": "ping"}],
+            max_output_tokens=32,
+            json_object=True,
+        )
+    )
+    assert forced["response_format"] == {"type": "json_object"}
     with pytest.raises(ProviderError):
         chat_body(model="meterless/auto", messages=[], max_output_tokens=1025)

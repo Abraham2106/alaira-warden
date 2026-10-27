@@ -536,7 +536,7 @@ def create_product_router(get_repository):
                 task=task,
                 evidence=[EvidenceRecord(id=str(a["id"])) for a in assessments],
                 max_output_tokens=512,
-                timeout=30,
+                timeout=120,
             )
         except ProviderError as error:
             raise HTTPException(502, {"category": error.kind, "verified": False}) from None

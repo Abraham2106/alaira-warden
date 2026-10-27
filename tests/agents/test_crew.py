@@ -21,7 +21,7 @@ def test_public_roster_has_distinct_responsibilities():
         "guardian",
     }
     assert all(item["never"] for item in crew)
-    assert any("fusiona" in item["never"].lower() for item in crew)
+    assert any("merge" in item["never"].lower() for item in crew)
 
 
 def test_unknown_agent_and_status_are_rejected():

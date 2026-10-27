@@ -141,9 +141,7 @@ def main() -> int:
     settings = Settings(_env_file=ROOT / ".env")
     if not settings.warden_migration_database_url.get_secret_value():
         raise SystemExit("WARDEN_MIGRATION_DATABASE_URL is required to grant the read-only login")
-    password = secrets.token_urlsafe(18).replace("-", "A").replace("_", "b") + "1a"
     connect_driver_network()
-    ensure_reader(settings, password)
     client = ZetarisClient(
         base_url="http://127.0.0.1:3000",
         org_id=os.getenv("WARDEN_ZETARIS_ORG_ID", ""),
@@ -152,6 +150,8 @@ def main() -> int:
     )
     listed = execute_sql(client, "SHOW DATASOURCES")
     if not datasource_present(listed):
+        password = secrets.token_urlsafe(18).replace("-", "A").replace("_", "b") + "1a"
+        ensure_reader(settings, password)
         create = (
             f"CREATE DATASOURCE {DATASOURCE} DESCRIBE BY 'Warden inventory and evidence views' "
             "OPTIONS ("

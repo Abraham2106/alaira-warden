@@ -1,8 +1,9 @@
 """OpenAI-compatible chat completion parsing shared by Meterless and NVIDIA.
 
-Only a non-empty string ``content`` is accepted. Media parts, tool calls, and a
-substituted model id are failures. Missing usage stays ``None``; a schema
-default of zero is not invented.
+Only a non-empty string ``content`` is accepted. Media parts and tool calls
+are failures. NVIDIA must echo the requested model. Nightshift may resolve a
+``meterless/*`` routing id to the backend that ran (for example Nemotron).
+Missing usage stays ``None``; a schema default of zero is not invented.
 """
 
 from __future__ import annotations
@@ -211,7 +212,14 @@ def parse_chat_result(
             secrets=secrets,
         )
     returned_model = payload.get("model")
-    if returned_model != requested_model:
+    if not isinstance(returned_model, str) or not returned_model.strip():
+        raise ProviderError(
+            provider=provider,
+            kind="invalid_response",
+            reason="response did not name a model",
+            secrets=secrets,
+        )
+    if provider == "nvidia" and returned_model != requested_model:
         raise ProviderError(
             provider=provider,
             kind="invalid_response",
@@ -273,7 +281,7 @@ def parse_chat_result(
         warnings.append("output stopped at the token limit")
     return ModelResult(
         provider=provider,
-        model=requested_model,
+        model=returned_model,
         request_id=request_id,
         text=text,
         usage=usage,
@@ -281,7 +289,13 @@ def parse_chat_result(
     )
 
 
-def chat_body(*, model: str, messages: list[dict[str, str]], max_output_tokens: int) -> bytes:
+def chat_body(
+    *,
+    model: str,
+    messages: list[dict[str, str]],
+    max_output_tokens: int,
+    json_object: bool = False,
+) -> bytes:
     if not isinstance(max_output_tokens, int) or isinstance(max_output_tokens, bool):
         raise ProviderError(
             provider="providers",
@@ -294,15 +308,15 @@ def chat_body(*, model: str, messages: list[dict[str, str]], max_output_tokens: 
             kind="unsupported",
             reason="max_output_tokens must be an integer from 1 to 1024",
         )
-    return json.dumps(
-        {
-            "model": model,
-            "messages": messages,
-            "max_tokens": max_output_tokens,
-            "stream": False,
-        },
-        separators=(",", ":"),
-    ).encode("utf-8")
+    payload: dict[str, object] = {
+        "model": model,
+        "messages": messages,
+        "max_tokens": max_output_tokens,
+        "stream": False,
+    }
+    if json_object:
+        payload["response_format"] = {"type": "json_object"}
+    return json.dumps(payload, separators=(",", ":")).encode("utf-8")
 
 
 def authorization(secret: str) -> dict[str, str]:

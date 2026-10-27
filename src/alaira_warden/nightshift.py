@@ -33,9 +33,13 @@ _CHECK_STATUSES = {
 
 
 def deployment_verified(result: ModelResult, requested_model: str) -> bool:
-    """True only after a successful Meterless generation that echoed the requested id."""
-    return (
-        bool(requested_model) and result.provider == "meterless" and result.model == requested_model
+    """True after a Nightshift generation with a named model.
+
+    Routing ids such as ``meterless/auto`` are modes. Nightshift may resolve
+    them to a cloud Nemotron id. That is still Nightshift, not NVIDIA-direct.
+    """
+    return bool(
+        requested_model.strip() and result.provider == "meterless" and str(result.model).strip()
     )
 
 
@@ -129,11 +133,14 @@ def prove_nightshift(
     report["verified"] = verified
     report["nightshift_deployment_verified"] = verified
     report["status"] = "available" if verified else "unproven"
-    report["reason"] = (
-        "generation succeeded and the runtime echoed the requested routing id"
-        if verified
-        else "generation returned a model id that does not match the requested routing id"
-    )
+    if verified and result.model == model:
+        report["reason"] = "generation succeeded and the runtime echoed the requested routing id"
+    elif verified:
+        report["reason"] = (
+            f"generation succeeded via Nightshift; runtime resolved {model} to {result.model}"
+        )
+    else:
+        report["reason"] = "generation did not name a usable model"
     return _without_secret(report, api_key)
 
 

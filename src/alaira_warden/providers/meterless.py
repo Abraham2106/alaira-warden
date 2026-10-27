@@ -37,10 +37,11 @@ _MODEL_ID = re.compile(r"^meterless/[a-z0-9][a-z0-9._-]{0,80}$")
 _PLACEHOLDER = "rt-local"
 _TIMEOUT_CEILING = 180.0
 _INVESTIGATION_SYSTEM = (
-    "Return one JSON object with the keys facts, hypotheses, references, limitations, "
-    "and proposals. facts items have statement and evidence_ids. hypotheses items have "
-    "statement and assumptions. proposals items have statement. references are evidence "
-    "ids or URLs taken only from the evidence list. Do not add URLs, do not assign "
+    "You output only one JSON object. No markdown, no numbered lists, no prose. "
+    "Keys: facts, hypotheses, references, limitations, and proposals. "
+    "facts items have statement and evidence_ids. hypotheses items have statement "
+    "and assumptions. proposals items have statement. references are evidence ids "
+    "or URLs taken only from the evidence list. Do not add URLs, do not assign "
     "exposure, and do not call tools."
 )
 
@@ -149,11 +150,17 @@ class MeterlessClient:
         prompt: str,
         max_output_tokens: int,
         timeout: float = _TIMEOUT_CEILING,
+        system: str | None = None,
+        json_object: bool = False,
     ) -> ModelResult:
         self._require_configured()
         model_id = self._model(model)
         if not prompt.strip():
             raise ProviderError(provider="meterless", kind="unsupported", reason="prompt is empty")
+        messages = []
+        if system is not None and system.strip():
+            messages.append({"role": "system", "content": system.strip()})
+        messages.append({"role": "user", "content": prompt.strip()})
         _, api_base = self._endpoints()
         response = send_with_budget(
             self._transport,
@@ -163,8 +170,9 @@ class MeterlessClient:
                 headers=self._headers(chat=True),
                 body=chat_body(
                     model=model_id,
-                    messages=[{"role": "user", "content": prompt}],
+                    messages=messages,
                     max_output_tokens=max_output_tokens,
+                    json_object=json_object,
                 ),
                 timeout=ensure_timeout(timeout, ceiling=_TIMEOUT_CEILING, provider="meterless"),
             ),
@@ -195,12 +203,13 @@ class MeterlessClient:
                 reason="investigation requires at least one evidence record",
             )
         evidence_payload = [item.model_dump() for item in evidence]
-        prompt = f"{_INVESTIGATION_SYSTEM}\nEvidence: {evidence_payload}\nTask: {task.strip()}"
         result = self.generate_text(
             model=model,
-            prompt=prompt,
+            prompt=f"Evidence: {evidence_payload}\nTask: {task.strip()}",
             max_output_tokens=max_output_tokens,
             timeout=timeout,
+            system=_INVESTIGATION_SYSTEM,
+            json_object=True,
         )
         try:
             structured = validate_investigation(result.text, evidence)

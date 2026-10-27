@@ -138,9 +138,9 @@ class ProductServices:
         )
 
     def inventory_stage(self, context: StageContext):
-        self.narrate(context, "cartographer", "started", "Lee el snapshot fijado.")
+        self.narrate(context, "cartographer", "started", "Reading the pinned snapshot.")
         if not context.snapshot_id:
-            self.narrate(context, "cartographer", "blocked", "No hay snapshot fijado.")
+            self.narrate(context, "cartographer", "blocked", "No snapshot pinned.")
             return StageOutput(status="blocked", reason="incomplete")
         row = None
         with connect(self.settings) as connection:
@@ -157,18 +157,18 @@ class ProductServices:
                     context,
                     "cartographer",
                     "blocked",
-                    "Inventario incompleto o Zetaris falló cerrado.",
+                    "Incomplete inventory or Zetaris failed closed.",
                     reason=reason,
                 )
                 return StageOutput(status="blocked", reason=reason)
         if not row:
-            self.narrate(context, "cartographer", "blocked", "El snapshot no está en el alcance.")
+            self.narrate(context, "cartographer", "blocked", "Snapshot is out of scope.")
             return StageOutput(status="blocked", reason="incomplete")
         self.narrate(
             context,
             "cartographer",
             "handed_off",
-            "Snapshot listo. Entrega al Explorador.",
+            "Snapshot ready. Handoff to Scout.",
             snapshot_id=str(row["id"]),
         )
         return StageOutput(status="ready", references=(UUID(str(row["id"])),))
@@ -176,7 +176,7 @@ class ProductServices:
     def sources_stage(self, context: StageContext):
         if cached := self.cached(context, "sources"):
             return cached
-        self.narrate(context, "scout", "started", "Consulta GitHub, OSV, NVD y KEV.")
+        self.narrate(context, "scout", "started", "Querying GitHub, OSV, NVD, and KEV.")
         seconds = max(0.1, context.deadline - time.monotonic() - 1)
         budget = WorkBudget(
             max_requests=8,
@@ -316,7 +316,7 @@ class ProductServices:
             context,
             "scout",
             "handed_off" if output.status == "ready" else "failed",
-            "Evidencia persistida." if output.status == "ready" else "Fuentes incompletas.",
+            "Evidence persisted." if output.status == "ready" else "Sources incomplete.",
             errors=errors,
         )
         return output
@@ -341,7 +341,7 @@ class ProductServices:
                 context,
                 "mnemonic",
                 "decided" if recall.get("available") else "skipped",
-                "Recall H-MEM listo." if recall.get("available") else "Sin recall previo.",
+                "H-MEM recall ready." if recall.get("available") else "No prior recall.",
                 available=bool(recall.get("available")),
             )
             app = connection.execute(
@@ -420,7 +420,7 @@ class ProductServices:
                 context,
                 "arbiter",
                 "decided",
-                "Exposición determinista registrada. El modelo no la asigna.",
+                "Deterministic exposure recorded. The model does not assign it.",
                 assessments=len(identifiers),
             )
             critique = run_planner_evaluator(
@@ -436,7 +436,7 @@ class ProductServices:
                 context,
                 "evaluator",
                 "skipped" if critique.get("status") == "skipped" else "decided",
-                "Crítica fail-open. La exposición no cambió.",
+                "Critique fail-open. Exposure did not change.",
                 critique_status=critique.get("status"),
                 changed_exposure=False,
             )

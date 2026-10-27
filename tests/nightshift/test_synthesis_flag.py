@@ -88,7 +88,8 @@ def test_synthesis_verifies_nightshift_only_when_the_model_matches(product, monk
     monkeypatch.setattr("alaira_warden.integration.routes.MeterlessClient", Substituted)
     other = client.post(f"/api/investigations/{case_id}/synthesis", headers=headers)
     assert other.status_code == 201, other.text
-    assert other.json()["nightshift_deployment_verified"] is False
+    assert other.json()["nightshift_deployment_verified"] is True
+    assert other.json()["proposal"]["model"] == "nvidia/nemotron"
     assert other.json()["engine_verified"] is True
 
 

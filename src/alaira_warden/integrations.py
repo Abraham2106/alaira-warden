@@ -120,7 +120,7 @@ ADAPTERS: tuple[AdapterSpec, ...] = (
     ),
     AdapterSpec(
         "cursor",
-        "Cursor programático",
+        "Cursor programmatic",
         "engineering",
         "conditional",
         "WARDEN_CURSOR_API_KEY",

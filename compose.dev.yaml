@@ -1,0 +1,11 @@
+# Only for running the API from the host with uv/uvicorn.
+# The base stack keeps PostgreSQL on an internal network without a published port.
+services:
+  db:
+    ports:
+      - "127.0.0.1:${WARDEN_DB_PORT:-5432}:5432"
+    networks: [database, development]
+
+networks:
+  development:
+

@@ -1,0 +1,80 @@
+name: alaira-warden
+
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: warden
+      POSTGRES_USER: warden_owner
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Run python scripts/bootstrap.py first}
+      WARDEN_DB_APP_PASSWORD: ${WARDEN_DB_APP_PASSWORD:?Run python scripts/bootstrap.py first}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./infra/postgres/init-runtime.sh:/docker-entrypoint-initdb.d/10-runtime.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U warden_owner -d warden"]
+      interval: 5s
+      timeout: 3s
+      retries: 15
+    networks: [database]
+    restart: unless-stopped
+
+  migrate:
+    build: .
+    environment:
+      WARDEN_DATABASE_URL: postgresql://warden_owner:${POSTGRES_PASSWORD}@db:5432/warden
+      LANGSMITH_TRACING: "false"
+    command: ["python", "-m", "alaira_warden.db"]
+    depends_on:
+      db:
+        condition: service_healthy
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    networks: [database]
+
+  api:
+    build: .
+    environment:
+      WARDEN_ENV: development
+      WARDEN_API_TOKEN: ${WARDEN_API_TOKEN:?Set WARDEN_API_TOKEN in .env first}
+      WARDEN_DATABASE_URL: postgresql://warden_app:${WARDEN_DB_APP_PASSWORD}@db:5432/warden
+      LANGSMITH_TRACING: "false"
+      OTEL_SERVICE_NAME: alaira-warden
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      WARDEN_GITHUB_TOKEN: ${WARDEN_GITHUB_TOKEN:-}
+      WARDEN_NVD_API_KEY: ${WARDEN_NVD_API_KEY:-}
+      WARDEN_METERLESS_API_KEY: ${WARDEN_METERLESS_API_KEY:-}
+      WARDEN_METERLESS_BASE_URL: ${WARDEN_METERLESS_BASE_URL:-}
+      WARDEN_NVIDIA_API_KEY: ${WARDEN_NVIDIA_API_KEY:-}
+      WARDEN_NVIDIA_BASE_URL: ${WARDEN_NVIDIA_BASE_URL:-}
+      WARDEN_GROK_API_KEY: ${WARDEN_GROK_API_KEY:-}
+      WARDEN_ZETARIS_API_KEY: ${WARDEN_ZETARIS_API_KEY:-}
+      WARDEN_CURSOR_API_KEY: ${WARDEN_CURSOR_API_KEY:-}
+    ports:
+      - "127.0.0.1:${WARDEN_HTTP_PORT:-8000}:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    init: true
+    networks: [database, services]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/ready')"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+networks:
+  database:
+    internal: true
+  services:
+
+volumes:
+  postgres_data:
+

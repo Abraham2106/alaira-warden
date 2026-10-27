@@ -61,3 +61,14 @@ test('each agent appears once while separate tasks and case context remain inspe
   assert.match(html, /Run one/);
   assert.match(html, /Run two/);
 });
+
+test('activity uses compact native disclosure rows without nested cards or repeated status icons', () => {
+  const ui = timeline();
+  const html = ui.agentTimeline([event('a', 'started', 0), event('b', 'decided', 1)]);
+  assert.match(html, /<details class="activity-agent"><summary class="activity-row">/);
+  assert.doesNotMatch(html, /activity-card|activity-card-header|activity-content|<article/);
+  assert.doesNotMatch(html, /<details[^>]*\sopen(?:\s|>)/);
+  assert.equal((html.match(/<picture /g) || []).length, 1);
+  assert.match(html, /class="activity-preview"/);
+  assert.match(html, /class="activity-history"/);
+});

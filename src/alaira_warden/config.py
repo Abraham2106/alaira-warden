@@ -1,8 +1,10 @@
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import SecretStr
+from pydantic import SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from alaira_warden.providers.urls import rewrite_loopback_for_container
 
 
 class Settings(BaseSettings):
@@ -37,7 +39,16 @@ class Settings(BaseSettings):
     warden_data_mode: Literal["local", "zetaris"] = "local"
     warden_zetaris_inventory_table: str = ""
     warden_zetaris_evidence_table: str = ""
+    warden_hmem_persist_dir: str = ""
     warden_cursor_api_key: SecretStr = SecretStr("")
+
+    @model_validator(mode="after")
+    def map_container_loopback(self):
+        self.warden_zetaris_base_url = rewrite_loopback_for_container(self.warden_zetaris_base_url)
+        self.warden_meterless_base_url = rewrite_loopback_for_container(
+            self.warden_meterless_base_url
+        )
+        return self
 
 
 @lru_cache

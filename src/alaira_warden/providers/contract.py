@@ -11,7 +11,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-ProviderName = Literal["meterless", "nvidia", "zetaris"]
+ProviderName = Literal["meterless", "nvidia", "zetaris", "hmem"]
 CheckStatus = Literal[
     "unconfigured",
     "unauthorized",

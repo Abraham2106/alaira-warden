@@ -4,11 +4,14 @@ from uuid import UUID, uuid4
 
 from psycopg.types.json import Jsonb
 
+from alaira_warden.agents import traces
 from alaira_warden.config import Settings
 from alaira_warden.correlation.engine import evaluate_snapshot
 from alaira_warden.correlation.models import Context
 from alaira_warden.db import connect
+from alaira_warden.hmem import HMEM, InvestigationMemory
 from alaira_warden.integration import convert
+from alaira_warden.integration.critique import run_planner_evaluator
 from alaira_warden.integration.data import CaseData
 from alaira_warden.intelligence import (
     SourceError,
@@ -32,6 +35,7 @@ from alaira_warden.inventory import (
 )
 from alaira_warden.inventory.github_read import HTTPResponse
 from alaira_warden.orchestration.runtime import StageContext, StageOutput, WorkflowRuntime
+from alaira_warden.providers.errors import ProviderError
 
 
 class GitHubReader:
@@ -46,9 +50,20 @@ class GitHubReader:
 
 
 class ProductServices:
-    def __init__(self, settings: Settings, transport=None):
+    def __init__(self, settings: Settings, transport=None, hmem=None, meterless=None):
         self.settings = settings
         self.transport = transport or UrllibTransport()
+        persist = settings.warden_hmem_persist_dir.strip() or None
+        self.hmem = hmem or HMEM({"actor": "warden", "persistDir": persist})
+        self.memory = InvestigationMemory(self.hmem)
+        self.meterless = meterless
+
+    def _load_memory(self, connection):
+        if not self.hmem.store.all():
+            self.memory.hydrate(connection)
+
+    def _save_memory(self, connection):
+        self.memory.flush(connection)
 
     def runtime(self):
         return WorkflowRuntime(
@@ -108,21 +123,60 @@ class ProductServices:
             (context.run_id, stage, Jsonb(output.model_dump(mode="json"))),
         )
 
-    def inventory_stage(self, context: StageContext):
-        with connect(self.settings) as connection:
-            row = connection.execute(
-                "SELECT id FROM inventory_snapshots WHERE id=%s AND application_id=%s",
-                (context.snapshot_id, context.application_id),
-            ).fetchone()
-        return (
-            StageOutput(status="ready", references=(row["id"],))
-            if row
-            else StageOutput(status="blocked", reason="incomplete")
+    def narrate(self, context: StageContext, agent: str, status: str, summary: str, **detail):
+        traces.emit(
+            self.settings,
+            investigation_id=context.investigation_id,
+            run_id=context.run_id,
+            agent=agent,
+            stage=(
+                context.idempotency_key.split(":")[1] if ":" in context.idempotency_key else "run"
+            ),
+            status=status,
+            summary=summary,
+            detail=detail,
         )
+
+    def inventory_stage(self, context: StageContext):
+        self.narrate(context, "cartographer", "started", "Lee el snapshot fijado.")
+        if not context.snapshot_id:
+            self.narrate(context, "cartographer", "blocked", "No hay snapshot fijado.")
+            return StageOutput(status="blocked", reason="incomplete")
+        row = None
+        with connect(self.settings) as connection:
+            try:
+                data = CaseData(self.settings, context.deadline)
+                row, _components = data.snapshot(
+                    connection, context.snapshot_id, context.application_id
+                )
+            except (ProviderError, ValueError):
+                reason = (
+                    "unsupported" if self.settings.warden_data_mode == "zetaris" else "incomplete"
+                )
+                self.narrate(
+                    context,
+                    "cartographer",
+                    "blocked",
+                    "Inventario incompleto o Zetaris falló cerrado.",
+                    reason=reason,
+                )
+                return StageOutput(status="blocked", reason=reason)
+        if not row:
+            self.narrate(context, "cartographer", "blocked", "El snapshot no está en el alcance.")
+            return StageOutput(status="blocked", reason="incomplete")
+        self.narrate(
+            context,
+            "cartographer",
+            "handed_off",
+            "Snapshot listo. Entrega al Explorador.",
+            snapshot_id=str(row["id"]),
+        )
+        return StageOutput(status="ready", references=(UUID(str(row["id"])),))
 
     def sources_stage(self, context: StageContext):
         if cached := self.cached(context, "sources"):
             return cached
+        self.narrate(context, "scout", "started", "Consulta GitHub, OSV, NVD y KEV.")
         seconds = max(0.1, context.deadline - time.monotonic() - 1)
         budget = WorkBudget(
             max_requests=8,
@@ -227,6 +281,12 @@ class ProductServices:
                     context.subject_id,
                     f"source.{record.source}.retrieved",
                 )
+            self._load_memory(connection)
+            for record in records:
+                self.memory.remember_source(
+                    record, context.investigation_id, context.advisory_identifier
+                )
+            self._save_memory(connection)
             output = StageOutput(status="ready", references=tuple(revisions))
             self.save_stage(connection, context, "sources", output)
             # Keep source completeness/errors and alias reasoning alongside the case.
@@ -252,6 +312,13 @@ class ProductServices:
                     ),
                 ),
             )
+        self.narrate(
+            context,
+            "scout",
+            "handed_off" if output.status == "ready" else "failed",
+            "Evidencia persistida." if output.status == "ready" else "Fuentes incompletas.",
+            errors=errors,
+        )
         return output
 
     def correlation_stage(self, context: StageContext):
@@ -266,6 +333,17 @@ class ProductServices:
             if not row:
                 return StageOutput(status="blocked", reason="incomplete")
             snapshot = convert.snapshot(row, components)
+            self._load_memory(connection)
+            packages = " ".join(dict.fromkeys(item.name for item in snapshot.components))
+            recall = self.memory.recall(f"{context.advisory_identifier} {packages}".strip())
+            self.memory.save_recall(connection, context.investigation_id, context.run_id, recall)
+            self.narrate(
+                context,
+                "mnemonic",
+                "decided" if recall.get("available") else "skipped",
+                "Recall H-MEM listo." if recall.get("available") else "Sin recall previo.",
+                available=bool(recall.get("available")),
+            )
             app = connection.execute(
                 "SELECT criticality FROM applications WHERE id=%s", (context.application_id,)
             ).fetchone()
@@ -325,6 +403,43 @@ class ProductServices:
                         ),
                     )
                 identifiers.append(assessment_id)
+                self.memory.remember_assessment(
+                    assessment,
+                    context.investigation_id,
+                    context.advisory_identifier,
+                    str(revision),
+                )
+            try:
+                found = self.hmem.conflicts.scan()
+                for conflict in found:
+                    self.hmem.conflicts.auto_resolve(conflict)
+            except Exception:
+                pass
+            self._save_memory(connection)
+            self.narrate(
+                context,
+                "arbiter",
+                "decided",
+                "Exposición determinista registrada. El modelo no la asigna.",
+                assessments=len(identifiers),
+            )
+            critique = run_planner_evaluator(
+                self.settings, assessment_ids=identifiers, client=self.meterless
+            )
+            connection.execute(
+                "INSERT INTO workflow_stage_results(run_id,stage,payload) "
+                "VALUES (%s,'critique',%s) "
+                "ON CONFLICT DO NOTHING",
+                (context.run_id, Jsonb(critique)),
+            )
+            self.narrate(
+                context,
+                "evaluator",
+                "skipped" if critique.get("status") == "skipped" else "decided",
+                "Crítica fail-open. La exposición no cambió.",
+                critique_status=critique.get("status"),
+                changed_exposure=False,
+            )
             output = StageOutput(status="ready", references=tuple(identifiers))
             self.save_stage(connection, context, "correlation", output)
             self.audit(

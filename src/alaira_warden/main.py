@@ -9,8 +9,12 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from alaira_warden import __version__
+from alaira_warden.agents.http import create_agent_router
+from alaira_warden.agents.roster import public_roster
+from alaira_warden.agents.traces import public_recent
 from alaira_warden.config import Settings, get_settings
 from alaira_warden.db import SchemaNotReady
+from alaira_warden.hmem import HMEM
 from alaira_warden.identity import (
     audit_actor,
     create_identity_router,
@@ -52,6 +56,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.settings = settings
     app.state.workflow = build_workflow()
     app.state.telemetry = instrument(app, settings)
+    persist = settings.warden_hmem_persist_dir.strip() or None
+    app.state.hmem = HMEM({"actor": "warden", "persistDir": persist})
 
     @app.exception_handler(psycopg.Error)
     async def database_error(_request: Request, _exc: psycopg.Error):
@@ -62,6 +68,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/health/live", tags=["health"])
     def live():
         return {"status": "ok", "version": __version__}
+
+    @app.get("/agents", tags=["agents"])
+    def agents_public():
+        return {
+            "crew": public_roster(),
+            "mocks_are_labeled": True,
+            "nightshift": "Host hotspot or labeled mock. Never NVIDIA-direct.",
+        }
+
+    @app.get("/agents/activity", tags=["agents"])
+    def agents_activity_public():
+        try:
+            events = public_recent(settings)
+        except (psycopg.Error, SchemaNotReady, OSError):
+            events = []
+        return {"events": events, "mocks_are_labeled": True}
 
     @app.get("/health/ready", tags=["health"])
     def ready(store: Store):
@@ -134,6 +156,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(api)
     app.include_router(create_identity_router(get_identity_auth))
     app.include_router(create_product_router(get_repository))
+    app.include_router(create_agent_router(get_repository))
     app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
     @app.get("/", include_in_schema=False)
@@ -151,7 +174,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "connect-src 'self'; img-src 'self'; object-src 'none'; "
                 "base-uri 'self'; frame-ancestors 'none'; form-action 'self'"
             )
-        if request.url.path.startswith("/api/"):
+        if request.url.path.startswith("/api/") or request.url.path.startswith("/agents"):
             response.headers["Cache-Control"] = "no-store"
         return response
 

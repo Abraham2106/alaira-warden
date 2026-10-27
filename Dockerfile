@@ -23,6 +23,7 @@ COPY --from=builder /wheels /wheels
 RUN pip install --no-cache-dir --no-index --find-links=/wheels alaira-warden \
     && rm -rf /wheels && useradd --create-home --uid 10001 warden
 COPY migrations ./migrations
+COPY scripts ./scripts
 USER warden
 EXPOSE 8000
 CMD ["uvicorn", "alaira_warden.main:app", "--host", "0.0.0.0", "--port", "8000"]

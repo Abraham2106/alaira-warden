@@ -76,12 +76,21 @@ ADAPTERS: tuple[AdapterSpec, ...] = (
     ),
     AdapterSpec(
         "meterless",
-        "Meterless",
+        "Nightshift",
         "model-access",
         "hackathon",
         "WARDEN_METERLESS_API_KEY",
         "WARDEN_METERLESS_BASE_URL",
-        notes="Hackathon requirement. Endpoint and contract are unset until verified.",
+        notes="Primary AI via the Nightshift hotspot (Meterless Runtime 0.90.0). "
+        "NVIDIA keys belong in Nightshift Providers. Generation is a separate check.",
+    ),
+    AdapterSpec(
+        "hmem",
+        "Meterless H-MEM",
+        "engine",
+        "hackathon",
+        None,
+        notes="Local Engine. Proof is the official conformance suite, not a network check.",
     ),
     AdapterSpec(
         "nvidia",
@@ -90,7 +99,7 @@ ADAPTERS: tuple[AdapterSpec, ...] = (
         "candidate",
         "WARDEN_NVIDIA_API_KEY",
         "WARDEN_NVIDIA_BASE_URL",
-        notes="Candidate model. Model output is not evidence of exposure.",
+        notes="Not a Warden provider. Configure Nemotron inside Nightshift Providers.",
     ),
     AdapterSpec(
         "grok",
@@ -104,9 +113,10 @@ ADAPTERS: tuple[AdapterSpec, ...] = (
         "zetaris",
         "Zetaris",
         "data",
-        "conditional",
+        "hackathon",
         "WARDEN_ZETARIS_API_KEY",
-        notes="Conditional. No query runs until access and schema are confirmed.",
+        "WARDEN_ZETARIS_BASE_URL",
+        notes="Mandatory data layer. Local UI uses username/password; SaaS uses org and API key.",
     ),
     AdapterSpec(
         "cursor",
@@ -139,9 +149,14 @@ def url_present(settings: Settings, item: AdapterSpec) -> bool:
 def integration_status(settings: Settings, checks=()) -> list[dict]:
     rows = []
     latest = {row["adapter"]: row["payload"] for row in checks}
-    connected = {"github", "osv", "nvd", "cisa-kev", "meterless", "zetaris"}
+    connected = {"github", "osv", "nvd", "cisa-kev", "meterless", "zetaris", "hmem"}
     for item in ADAPTERS:
         configured = secret_present(settings, item) or url_present(settings, item)
+        if item.id == "zetaris":
+            configured = configured or bool(
+                settings.warden_zetaris_username
+                and settings.warden_zetaris_password.get_secret_value()
+            )
         if item.secret_env is None and item.url_env is None:
             auth = {"mode": "none", "configured": False}
         else:
@@ -164,7 +179,11 @@ def integration_status(settings: Settings, checks=()) -> list[dict]:
                 "verified": latest.get(item.id, {}).get("verified", False) is True,
                 "verified_operation": latest.get(item.id, {}).get("operation"),
                 "last_checked_at": latest.get(item.id, {}).get("checked_at"),
-                "engine_verified": False if item.id == "meterless" else None,
+                "engine_verified": latest.get(item.id, {}).get("verified", False)
+                if item.id == "hmem"
+                else False
+                if item.id == "meterless"
+                else None,
                 "auth": auth,
                 "notes": "Client connected; verification applies only to the recorded operation. "
                 "Sponsor acceptance remains pending."

@@ -49,6 +49,8 @@ def product(monkeypatch):
         "integration.routes",
         "integration.services",
         "orchestration.runtime",
+        "agents.traces",
+        "agents.response",
     ):
         monkeypatch.setattr(f"alaira_warden.{module}.connect", runtime)
     monkeypatch.setattr("alaira_warden.orchestration.runtime.checkpoint_connection", checkpoints)

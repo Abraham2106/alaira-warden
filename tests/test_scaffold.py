@@ -44,6 +44,25 @@ def test_liveness_does_not_require_database(client):
     assert client.get("/health/live").json()["status"] == "ok"
 
 
+def test_public_agent_roster_does_not_require_a_token(client):
+    response = client.get("/agents")
+    assert response.status_code == 200
+    names = {item["id"] for item in response.json()["crew"]}
+    assert "warden" in names and "arbiter" in names
+
+
+def test_public_agent_activity_does_not_require_a_token(client):
+    response = client.get("/agents/activity")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["mocks_are_labeled"] is True
+    assert isinstance(body["events"], list)
+    for event in body["events"]:
+        assert "investigation_id" not in event
+        assert event["agent"]
+        assert event["summary"]
+
+
 @pytest.mark.parametrize("path", ["/api/applications", "/api/investigations", "/api/integrations"])
 def test_api_rejects_missing_token(client, path):
     assert client.get(path).status_code == 401
@@ -69,7 +88,16 @@ def test_pending_integrations_are_not_reported_as_verified(client):
     response = client.get("/api/integrations", headers={"Authorization": "Bearer test-token"})
     assert response.status_code == 200
     rows = response.json()
-    assert {row["id"] for row in rows} >= {"meterless", "osv", "nvd", "cisa-kev", "syft", "trivy"}
+    assert {row["id"] for row in rows} >= {
+        "meterless",
+        "hmem",
+        "zetaris",
+        "osv",
+        "nvd",
+        "cisa-kev",
+        "syft",
+        "trivy",
+    }
     assert all(
         row["status"] in {"not_implemented", "implemented_unverified"} and row["verified"] is False
         for row in rows
@@ -98,6 +126,27 @@ def test_configured_secret_is_not_verified_or_echoed():
     payload = json.dumps(rows)
     assert secret not in payload
     assert "ghp_" not in payload
+
+
+def test_zetaris_local_login_counts_as_configured_not_verified():
+    settings = Settings(
+        _env_file=None,
+        warden_api_token="test-token",
+        warden_identity_pepper="test-pepper-long-enough",
+        warden_zetaris_base_url="http://127.0.0.1:3000",
+        warden_zetaris_username="reader",
+        warden_zetaris_password="local-only",
+    )
+    with TestClient(create_app(settings)) as client:
+        client.app.dependency_overrides[get_principal] = admin
+        client.app.dependency_overrides[get_repository] = lambda: SimpleNamespace(
+            integration_checks=lambda: []
+        )
+        response = client.get("/api/integrations", headers={"Authorization": "Bearer test-token"})
+    zetaris = next(row for row in response.json() if row["id"] == "zetaris")
+    assert zetaris["auth"]["configured"] is True
+    assert zetaris["verified"] is False
+    assert "local-only" not in json.dumps(response.json())
     with pytest.raises(AdapterNotImplemented, match="not implemented"):
         invoke(settings, "github")
 

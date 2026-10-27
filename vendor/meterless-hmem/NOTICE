@@ -1,0 +1,7 @@
+This directory contains the official Meterless H-MEM engine (Apache-2.0),
+copied from https://github.com/Meterless/Meterless/tree/main/engines/hmem
+for attribution and the conformance suite.
+
+ALAIRA Warden's runtime is the Python port in src/alaira_warden/hmem, which
+implements the same constructor, services, ranking formula, feedback deltas,
+sleep guardrails, conflict gate, ledger actions, and dream approval boundary.

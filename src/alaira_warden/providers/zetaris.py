@@ -20,6 +20,7 @@ import re
 import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime
+from urllib.parse import urlsplit
 
 from alaira_warden.providers.chat import (
     decode_object,
@@ -110,12 +111,21 @@ class ZetarisClient:
         )
 
     def check(self) -> ProviderCheck:
-        if (
-            not self._base_url.strip()
-            or not self._org_id
-            or not self._username
-            or not self._password
-        ):
+        if not self._base_url.strip() or not self._username or not self._password:
+            return self._status(
+                operation="auth.login",
+                status="unconfigured",
+                reason=(
+                    "Zetaris login needs the instance URL, username, and password"
+                    if self._loopback()
+                    else (
+                        "Zetaris login needs the instance URL, organization id, "
+                        "username, and password"
+                    )
+                ),
+                verified=False,
+            )
+        if not self._loopback() and not self._org_id:
             return self._status(
                 operation="auth.login",
                 status="unconfigured",
@@ -124,37 +134,8 @@ class ZetarisClient:
                 ),
                 verified=False,
             )
-        self._reject_whitespace()
-        if ":" in self._username:
-            raise ProviderError(
-                provider="zetaris",
-                kind="unsupported",
-                reason="username cannot contain a colon",
-            )
-        origin = self._origin()
-        request_id = self._request_id()
-        token = base64.b64encode(f"{self._username}:{self._password}".encode()).decode("ascii")
         try:
-            response = send_with_budget(
-                self._transport,
-                HttpRequest(
-                    method="GET",
-                    url=f"{origin}/api/v1.0/auth/login",
-                    headers={
-                        "Authorization": f"Basic {token}",
-                        "Accept": "application/json",
-                        "X-Request-ID": request_id,
-                        "X-Org-ID": self._org_id,
-                    },
-                    body=None,
-                    timeout=ensure_timeout(
-                        _TIMEOUT_CEILING, ceiling=_TIMEOUT_CEILING, provider="zetaris"
-                    ),
-                ),
-                provider="zetaris",
-                secrets=self._secrets,
-                max_attempts=self._max_attempts,
-            )
+            self._login()
         except ProviderError as exc:
             if exc.kind == "offline":
                 return self._status(
@@ -163,26 +144,14 @@ class ZetarisClient:
                     reason=exc.reason,
                     verified=False,
                 )
+            if exc.kind in {"unauthorized", "forbidden"}:
+                return self._status(
+                    operation="auth.login",
+                    status=exc.kind,  # type: ignore[arg-type]
+                    reason=exc.reason,
+                    verified=False,
+                )
             raise
-        error = failure_from_status(response, provider="zetaris", secrets=self._secrets)
-        if error is not None and error.kind in {"unauthorized", "forbidden", "offline"}:
-            return self._status(
-                operation="auth.login",
-                status=error.kind,  # type: ignore[arg-type]
-                reason=error.reason,
-                verified=False,
-            )
-        if error is not None:
-            raise error
-        payload = decode_object(response, provider="zetaris", secrets=self._secrets)
-        identity = payload.get("idToken")
-        if not isinstance(identity, str) or not identity.strip():
-            raise ProviderError(
-                provider="zetaris",
-                kind="invalid_response",
-                reason="login response did not contain an id token",
-                secrets=self._secrets,
-            )
         return self._status(
             operation="auth.login",
             status="available",
@@ -192,7 +161,20 @@ class ZetarisClient:
         )
 
     def query(self, statement: str, *, timeout: float = 30) -> ZetarisQueryResult:
-        if not self._base_url.strip() or not self._org_id or not self._api_key:
+        if not self._base_url.strip():
+            raise ProviderError(
+                provider="zetaris",
+                kind="unconfigured",
+                reason="Zetaris query needs the instance URL, organization id, and API key",
+            )
+        if self._loopback():
+            if not self._username or not self._password:
+                raise ProviderError(
+                    provider="zetaris",
+                    kind="unconfigured",
+                    reason="Zetaris local query needs the instance URL, username, and password",
+                )
+        elif not self._org_id or not self._api_key:
             raise ProviderError(
                 provider="zetaris",
                 kind="unconfigured",
@@ -203,9 +185,23 @@ class ZetarisClient:
         reject_if_secret(sql, provider="zetaris", secrets=self._secrets, what="statement")
         origin = self._origin()
         request_id = self._request_id()
-        response = send_with_budget(
-            self._transport,
-            HttpRequest(
+        if self._loopback():
+            token, org_id = self._login()
+            request = HttpRequest(
+                method="POST",
+                url=f"{origin}/api/proxy/sql-editor/sqls/run-query",
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json",
+                    "Accept": "application/json",
+                    "X-Request-ID": request_id,
+                    "X-Org-ID": org_id,
+                },
+                body=json.dumps({"sql": sql}, separators=(",", ":")).encode("utf-8"),
+                timeout=ensure_timeout(timeout, ceiling=_TIMEOUT_CEILING, provider="zetaris"),
+            )
+        else:
+            request = HttpRequest(
                 method="POST",
                 url=f"{origin}/api/v1.0/sql-editor/sqls/run-query",
                 headers={
@@ -217,7 +213,10 @@ class ZetarisClient:
                 },
                 body=json.dumps({"sql": sql}, separators=(",", ":")).encode("utf-8"),
                 timeout=ensure_timeout(timeout, ceiling=_TIMEOUT_CEILING, provider="zetaris"),
-            ),
+            )
+        response = send_with_budget(
+            self._transport,
+            request,
             provider="zetaris",
             secrets=self._secrets,
             max_attempts=self._max_attempts,
@@ -239,7 +238,94 @@ class ZetarisClient:
             ],
         )
 
+    def _loopback(self) -> bool:
+        if not self._base_url.strip():
+            return False
+        host = (urlsplit(self._origin()).hostname or "").lower()
+        return host in {"localhost", "127.0.0.1", "::1", "host.docker.internal"}
+
+    def _login(self) -> tuple[str, str]:
+        self._reject_whitespace()
+        if ":" in self._username:
+            raise ProviderError(
+                provider="zetaris",
+                kind="unsupported",
+                reason="username cannot contain a colon",
+            )
+        origin = self._origin()
+        request_id = self._request_id()
+        if self._loopback():
+            request = HttpRequest(
+                method="POST",
+                url=f"{origin}/api/auth/login",
+                headers={
+                    "Accept": "application/json",
+                    "Content-Type": "application/json",
+                    "X-Request-ID": request_id,
+                },
+                body=json.dumps(
+                    {"username": self._username, "password": self._password},
+                    separators=(",", ":"),
+                ).encode("utf-8"),
+                timeout=ensure_timeout(
+                    _TIMEOUT_CEILING, ceiling=_TIMEOUT_CEILING, provider="zetaris"
+                ),
+            )
+        else:
+            token = base64.b64encode(f"{self._username}:{self._password}".encode()).decode("ascii")
+            request = HttpRequest(
+                method="GET",
+                url=f"{origin}/api/v1.0/auth/login",
+                headers={
+                    "Authorization": f"Basic {token}",
+                    "Accept": "application/json",
+                    "X-Request-ID": request_id,
+                    "X-Org-ID": self._org_id,
+                },
+                body=None,
+                timeout=ensure_timeout(
+                    _TIMEOUT_CEILING, ceiling=_TIMEOUT_CEILING, provider="zetaris"
+                ),
+            )
+        response = send_with_budget(
+            self._transport,
+            request,
+            provider="zetaris",
+            secrets=self._secrets,
+            max_attempts=self._max_attempts,
+        )
+        error = failure_from_status(response, provider="zetaris", secrets=self._secrets)
+        if error is not None:
+            raise error
+        payload = decode_object(response, provider="zetaris", secrets=self._secrets)
+        identity = payload.get("idToken") or payload.get("token") or payload.get("accessToken")
+        if not isinstance(identity, str) or not identity.strip():
+            raise ProviderError(
+                provider="zetaris",
+                kind="invalid_response",
+                reason="login response did not contain an id token",
+                secrets=self._secrets,
+            )
+        org = payload.get("orgId")
+        org_id = str(org).strip() if org is not None else self._org_id
+        if self._org_id and org_id and self._org_id != org_id:
+            raise ProviderError(
+                provider="zetaris",
+                kind="invalid_response",
+                reason="login organization did not match the configured organization id",
+                secrets=self._secrets,
+            )
+        if not org_id:
+            raise ProviderError(
+                provider="zetaris",
+                kind="invalid_response",
+                reason="login response did not contain an organization id",
+                secrets=self._secrets,
+            )
+        return identity, org_id
+
     def _table(self, payload: dict, *, limit: int) -> tuple[list[str], list[list]]:
+        payload = self._unwrap_query(payload)
         headers = payload.get("headers")
         data = payload.get("data")
         if not isinstance(headers, list) or not headers or not isinstance(data, list):
@@ -290,6 +376,58 @@ class ZetarisClient:
                 values.append(value)
             rows.append(values)
         return columns, rows
+
+    def _unwrap_query(self, payload: object) -> dict:
+        current = payload
+        for _ in range(6):
+            if isinstance(current, dict) and current.get("data") == []:
+                headers = current.get("headers") or ["payload"]
+                if isinstance(headers, list) and headers:
+                    return {"headers": headers, "data": []}
+            if isinstance(current, list) and current and isinstance(current[0], dict):
+                columns: list[str] = []
+                for record in current:
+                    if not isinstance(record, dict):
+                        break
+                    for key in record:
+                        if key not in columns:
+                            columns.append(str(key))
+                else:
+                    return {
+                        "headers": columns,
+                        "data": [[record.get(column) for column in columns] for record in current],
+                    }
+            if not isinstance(current, dict):
+                break
+            headers, data = current.get("headers"), current.get("data")
+            if isinstance(headers, list) and headers and isinstance(data, list):
+                if data and isinstance(data[0], dict):
+                    return {
+                        "headers": headers,
+                        "data": [[row.get(column) for column in headers] for row in data],
+                    }
+                return current
+            records = current.get("data")
+            if isinstance(records, list) and records and isinstance(records[0], dict):
+                current = records
+                continue
+            nested = None
+            for key in ("result", "payload", "body", "response", "rows"):
+                value = current.get(key)
+                if isinstance(value, (dict, list)):
+                    nested = value
+                    break
+            if nested is None:
+                break
+            current = nested
+        if not isinstance(payload, dict):
+            raise ProviderError(
+                provider="zetaris",
+                kind="invalid_response",
+                reason="query response did not contain headers and data",
+                secrets=self._secrets,
+            )
+        return payload
 
     def _origin(self) -> str:
         try:

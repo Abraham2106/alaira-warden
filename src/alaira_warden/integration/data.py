@@ -44,12 +44,18 @@ class CaseData:
                 provider="zetaris", kind="invalid_response", reason="Expected one data view row"
             )
         self.sources.extend(source for source in result.sources if source not in self.sources)
-        try:
-            payload = json.loads(result.rows[0][0])
-        except (ValueError, TypeError):
-            raise ProviderError(
-                provider="zetaris", kind="invalid_response", reason="Invalid data view payload"
-            ) from None
+        raw = result.rows[0][0]
+        if isinstance(raw, dict):
+            payload = raw
+        else:
+            try:
+                payload = json.loads(raw)
+            except (ValueError, TypeError):
+                raise ProviderError(
+                    provider="zetaris",
+                    kind="invalid_response",
+                    reason="Invalid data view payload",
+                ) from None
         if not isinstance(payload, dict):
             raise ProviderError(
                 provider="zetaris", kind="invalid_response", reason="Invalid data view object"

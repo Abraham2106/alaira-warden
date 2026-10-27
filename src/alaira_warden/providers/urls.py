@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
 from alaira_warden.providers.errors import ProviderError
@@ -12,8 +13,15 @@ _ZETARIS_SUFFIXES = (
     "/api/v1.0/sql-editor/sqls/run-query",
     "/api/v1.0/auth/login",
     "/api/v1.0",
+    "/api/proxy/sql-editor/sqls/run-query",
+    "/api/proxy/query/sql/start",
+    "/api/auth/login",
+    "/api/proxy/query",
+    "/api",
 )
 _LOOPBACK = {"localhost", "127.0.0.1", "::1"}
+_HTTP_HOSTS = _LOOPBACK | {"host.docker.internal"}
+_DOCKERENV = Path("/.dockerenv")
 
 
 def _fail(provider: str, reason: str) -> None:
@@ -35,7 +43,7 @@ def _add_scheme(raw: str) -> str:
         hostname = host.split("]")[0].removeprefix("[")
     else:
         hostname = host.split(":")[0]
-    scheme = "http" if hostname.lower() in _LOOPBACK else "https"
+    scheme = "http" if hostname.lower() in _HTTP_HOSTS else "https"
     return f"{scheme}://{raw}"
 
 
@@ -68,13 +76,27 @@ def _origin(
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
         _fail(provider, "base URL scheme or host is invalid")
     hostname = parsed.hostname.lower()
-    if parsed.scheme == "http" and not (allow_http_loopback and hostname in _LOOPBACK):
+    if parsed.scheme == "http" and not (allow_http_loopback and hostname in _HTTP_HOSTS):
         _fail(provider, "cleartext URLs are limited to the Meterless loopback runtime")
     remainder = _strip_suffixes(parsed.path or "", suffixes)
     if remainder not in {"", "/"}:
         _fail(provider, "base URL path is not part of the verified contract")
     netloc = parsed.netloc.lower()
     return urlunsplit((parsed.scheme, netloc, "", "", ""))
+
+
+def rewrite_loopback_for_container(url: str) -> str:
+    """Map host loopback to host.docker.internal when the API runs in Docker."""
+    value = url.strip()
+    if not value or not _DOCKERENV.exists():
+        return url
+    parsed = urlsplit(_add_scheme(value))
+    host = (parsed.hostname or "").lower()
+    if host not in _LOOPBACK:
+        return url
+    port = parsed.port
+    netloc = f"host.docker.internal:{port}" if port else "host.docker.internal"
+    return urlunsplit((parsed.scheme or "http", netloc, parsed.path, parsed.query, parsed.fragment))
 
 
 def meterless_endpoints(base_url: str) -> tuple[str, str]:
@@ -100,7 +122,7 @@ def nvidia_api_base(base_url: str) -> str:
 
 
 def zetaris_origin(base_url: str) -> str:
-    origin = _origin("zetaris", base_url, suffixes=_ZETARIS_SUFFIXES, allow_http_loopback=False)
+    origin = _origin("zetaris", base_url, suffixes=_ZETARIS_SUFFIXES, allow_http_loopback=True)
     host = urlsplit(origin).hostname or ""
     if host == "integrate.api.nvidia.com":
         _fail("zetaris", "refusing to send the Zetaris credential to the NVIDIA host")

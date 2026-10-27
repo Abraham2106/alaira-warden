@@ -21,7 +21,12 @@ from alaira_warden.providers.http import (
 from alaira_warden.providers.meterless import MeterlessClient
 from alaira_warden.providers.nvidia import NvidiaClient
 from alaira_warden.providers.structured import EvidenceRecord
-from alaira_warden.providers.urls import meterless_endpoints, nvidia_api_base, zetaris_origin
+from alaira_warden.providers.urls import (
+    meterless_endpoints,
+    nvidia_api_base,
+    rewrite_loopback_for_container,
+    zetaris_origin,
+)
 from alaira_warden.providers.zetaris import ZetarisClient
 
 NOW = datetime(2026, 10, 26, tzinfo=UTC)
@@ -122,12 +127,32 @@ def test_urls_normalize_once_and_reject_embedded_credentials():
     assert (
         zetaris_origin("https://zetaris.example/api/v1.0/auth/login") == "https://zetaris.example"
     )
+    assert zetaris_origin("http://127.0.0.1:3000") == "http://127.0.0.1:3000"
+    assert zetaris_origin("localhost:3000/api/v1.0") == "http://localhost:3000"
+    assert zetaris_origin("http://host.docker.internal:3000") == "http://host.docker.internal:3000"
+    assert meterless_endpoints("http://host.docker.internal:8088/v1")[1] == (
+        "http://host.docker.internal:8088/v1"
+    )
     with pytest.raises(ProviderError, match="embedded credentials") as exc:
         meterless_endpoints("http://user:meterless-token-value@127.0.0.1:8088/v1")
     assert_clean(str(exc.value))
     with pytest.raises(ProviderError, match="embedded credentials") as exc:
         meterless_endpoints("http://127.0.0.1:8088/connect#k=meterless-token-value")
     assert_clean(str(exc.value))
+
+
+def test_container_loopback_rewrite_only_inside_docker(monkeypatch, tmp_path):
+    host = "http://127.0.0.1:8088/v1"
+    assert rewrite_loopback_for_container(host) == host
+    monkeypatch.setattr("alaira_warden.providers.urls._DOCKERENV", tmp_path / "missing-dockerenv")
+    assert rewrite_loopback_for_container(host) == host
+    marker = tmp_path / ".dockerenv"
+    marker.write_text("", encoding="utf-8")
+    monkeypatch.setattr("alaira_warden.providers.urls._DOCKERENV", marker)
+    assert rewrite_loopback_for_container(host) == "http://host.docker.internal:8088/v1"
+    assert rewrite_loopback_for_container("http://host.docker.internal:3000") == (
+        "http://host.docker.internal:3000"
+    )
 
 
 def test_meterless_connection_states_are_distinct():
@@ -540,6 +565,34 @@ def test_zetaris_login_and_bounded_read_keep_provenance():
         zetaris(denied).query("SELECT id FROM synthetic.events LIMIT 1")
     assert exc.value.kind == "forbidden"
     assert_clean(str(exc.value))
+
+
+def test_zetaris_loopback_uses_ui_proxy_and_discards_the_session():
+    accepted = response(200, {"token": "id-token-value", "orgId": 4})
+    transport = Scripted(
+        [accepted, accepted, response(200, {"data": [{"payload": '{"ok": true}'}]})]
+    )
+    client = zetaris(
+        transport,
+        base_url="http://127.0.0.1:3000",
+        org_id="",
+        api_key="",
+    )
+    checked = client.check()
+    assert checked.status == "available"
+    assert checked.verified is True
+    dumped = checked.model_dump_json()
+    assert "id-token-value" not in dumped
+    assert_clean(dumped)
+    result = client.query("SELECT payload FROM warden_pg.warden_inventory_data LIMIT 1")
+    assert result.columns == ["payload"]
+    assert result.rows == [['{"ok": true}']]
+    assert transport.calls[0].method == "POST"
+    assert transport.calls[0].url == "http://127.0.0.1:3000/api/auth/login"
+    assert transport.calls[-1].url == "http://127.0.0.1:3000/api/proxy/sql-editor/sqls/run-query"
+    assert json.loads(transport.calls[-1].body.decode()) == {
+        "sql": "SELECT payload FROM warden_pg.warden_inventory_data LIMIT 1"
+    }
 
 
 def test_stdlib_transport_does_not_follow_redirects():

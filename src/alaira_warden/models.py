@@ -52,6 +52,13 @@ class InvestigationCreate(BaseModel):
 
 class Investigation(InvestigationCreate):
     id: UUID
-    status: Literal["detected", "requires_intervention", "investigating", "awaiting_review"]
+    status: Literal[
+        "detected",
+        "requires_intervention",
+        "investigating",
+        "awaiting_review",
+        "closed",
+        "cancelled",
+    ]
     exposure: Literal["undetermined", "not_affected", "potential", "confirmed"]
     created_at: datetime

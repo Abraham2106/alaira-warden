@@ -21,6 +21,7 @@ class Repository:
             connection.execute("SELECT id FROM identity_subjects LIMIT 0")
             connection.execute("SELECT id FROM assessments LIMIT 0")
             connection.execute("SELECT id FROM warden_inventory_data LIMIT 0")
+            connection.execute("SELECT id FROM agent_events LIMIT 0")
 
     def integration_checks(self):
         with connect(self.settings) as connection:

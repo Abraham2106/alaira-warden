@@ -17,3 +17,7 @@ reports/local/
 # Local proprietary platform bundle and configuration; never part of the project source.
 /zetaris-platform/
 
+# Documentation is local-only: product notes, SRS/WBS, and vendor markdown.
+*.md
+/docs/
+

@@ -3,14 +3,16 @@ import time
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from urllib.parse import urlsplit
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 
+from alaira_warden.integration.critique import run_planner_evaluator
 from alaira_warden.integration.data import CaseData
 from alaira_warden.integration.routes import get_services
 from alaira_warden.integration.services import ProductServices
 from alaira_warden.intelligence.http import HttpResponse
+from alaira_warden.orchestration.runtime import StageContext
 from alaira_warden.providers.contract import ModelResult
 from alaira_warden.providers.errors import ProviderError
 
@@ -190,11 +192,17 @@ def test_authenticated_inventory_sources_correlation_and_review_roundtrip(produc
 
     first = run()
     assert first["assessments"]
+    assert first["memory"]
+    assert first["memory"]["engine"] == "hmem"
+    assert first["memory"]["available"] is True
+    assert first["memory"]["memories"]
     assert {a["payload"]["exposure"] for a in first["assessments"]} == {"undetermined"}
     assert any(
         a["payload"]["findings"][0]["version_affected"] is True for a in first["assessments"]
     )
     assert first["sponsor_data_layer_verified"] is False
+    assert first["critiques"]
+    assert first["critiques"][0]["payload"]["changed_exposure"] is False
     for evidence in first["evidence"]:
         if evidence["source"] in {"github", "osv"}:
             response = client.post(
@@ -376,6 +384,56 @@ def test_provider_checks_do_not_invent_access_without_configuration(product):
         assert response.json()["verified"] is False
 
 
+def test_hmem_conformance_check_and_feedback_do_not_change_exposure(product):
+    client, headers = product["client"], product["headers"]
+    check = client.post("/api/integrations/hmem/check", headers=headers)
+    assert check.status_code == 200, check.text
+    assert check.json()["verified"] is True
+    assert check.json()["operation"] == "conformance"
+    app_id, case_id, _ = setup_case(product)
+    snapshot = client.post(
+        f"/api/applications/{app_id}/inventory/refresh", headers=headers, json={}
+    ).json()
+    run = client.post(
+        f"/api/investigations/{case_id}/runs",
+        headers=headers,
+        json={
+            "snapshot_id": snapshot["id"],
+            "advisory_identifier": GHSA,
+            "request_key": str(uuid4()),
+        },
+    ).json()
+    for _ in range(3):
+        assert (
+            client.post(
+                f"/api/investigations/{case_id}/runs/{run['id']}/advance", headers=headers
+            ).status_code
+            == 200
+        )
+    before = client.get(f"/api/investigations/{case_id}", headers=headers).json()["exposure"]
+    context = client.get(f"/api/investigations/{case_id}/context", headers=headers).json()
+    memory_id = context["memory"]["memories"][0]["id"]
+    feedback = client.post(
+        f"/api/investigations/{case_id}/memory/feedback",
+        headers=headers,
+        json={"memory_id": memory_id, "kind": "helpful"},
+    )
+    assert feedback.status_code == 200, feedback.text
+    assert feedback.json()["delta"] == 0.05
+    queried = client.post(
+        f"/api/investigations/{case_id}/memory/query",
+        headers=headers,
+        json={"query": "lodash advisory", "threshold": 0},
+    )
+    assert queried.status_code == 200, queried.text
+    assert queried.json()["engine"] == "hmem"
+    preview = client.post(f"/api/investigations/{case_id}/memory/sleep", headers=headers, json={})
+    assert preview.status_code == 200, preview.text
+    assert preview.json()["report"] is None
+    after = client.get(f"/api/investigations/{case_id}", headers=headers).json()["exposure"]
+    assert after == before
+
+
 def test_authorized_model_bridge_sends_only_minimized_fields_and_does_not_set_exposure(
     product, monkeypatch
 ):
@@ -429,7 +487,67 @@ def test_authorized_model_bridge_sends_only_minimized_fields_and_does_not_set_ex
     assert "Synthetic dataset" not in observed[0]["task"]
     assert observed[0]["max_output_tokens"] == 512
     assert result.json()["evidence"] is False
-    assert result.json()["engine_verified"] is False
+    assert result.json()["engine_verified"] is True
     assert (
         client.get(f"/api/investigations/{case_id}", headers=headers).json()["exposure"] == before
     )
+
+
+def test_inventory_stage_fails_closed_when_zetaris_views_are_missing(product):
+    app_id, case_id, _ = setup_case(product)
+    snapshot = (
+        product["client"]
+        .post(
+            f"/api/applications/{app_id}/inventory/refresh",
+            headers=product["headers"],
+            json={},
+        )
+        .json()
+    )
+    settings = product["settings"].model_copy(
+        update={"warden_data_mode": "zetaris", "warden_zetaris_inventory_table": ""}
+    )
+    output = ProductServices(settings, transport=PublicFixtures()).inventory_stage(
+        StageContext(
+            uuid4(),
+            UUID(str(app_id)),
+            UUID(str(case_id)),
+            "tester",
+            "inventory:v1",
+            time.monotonic() + 30,
+            lambda: False,
+            {},
+            UUID(str(snapshot["id"])),
+            GHSA,
+            "zetaris",
+        )
+    )
+    assert output.status == "blocked"
+    assert output.reason == "unsupported"
+
+
+def test_planner_evaluator_is_fail_open_and_never_changes_exposure(product):
+    calls = []
+
+    class Critic:
+        def generate_text(self, **kwargs):
+            calls.append(kwargs)
+            return ModelResult(
+                provider="meterless", model="meterless/auto", text="Do not change exposure."
+            )
+
+    configured = product["settings"].model_copy(
+        update={
+            "warden_model_dispatch_policy": "allow_minimized",
+            "warden_meterless_base_url": "http://127.0.0.1:8088/v1",
+            "warden_meterless_api_key": "nightshift-token",
+            "warden_meterless_model": "meterless/auto",
+        }
+    )
+    ready = run_planner_evaluator(configured, assessment_ids=["a"], client=Critic())
+    assert ready["status"] == "ready"
+    assert ready["changed_exposure"] is False
+    assert len(calls) == 2
+    skipped = run_planner_evaluator(product["settings"], assessment_ids=["a"], client=Critic())
+    assert skipped["status"] == "skipped"
+    assert skipped["changed_exposure"] is False

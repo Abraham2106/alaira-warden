@@ -1,0 +1,21 @@
+# Host attachment for Meterless Nightshift. There is no public Nightshift
+# container image in github.com/Meterless/Meterless or on meterless.ai
+# (checked 2026-10-27). This overlay does not start Nightshift.
+#
+# Install the Windows, Mac, or DGX edition, start it on the host, then:
+#   python infra/nightshift/wait_runtime.py
+#   docker compose -f compose.yaml -f compose.nightshift.yaml up -d --build --wait api
+#
+# WARDEN_METERLESS_BASE_URL on the host is http://127.0.0.1:8088/v1.
+# Settings rewrites that loopback to host.docker.internal when /.dockerenv exists.
+# The token is <stateDir>/proxy-token. rt-local is rejected.
+# NVIDIA Nemotron is configured in Nightshift Providers, not in this file.
+
+services:
+  api:
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      WARDEN_METERLESS_BASE_URL: ${WARDEN_METERLESS_BASE_URL:-}
+      WARDEN_METERLESS_API_KEY: ${WARDEN_METERLESS_API_KEY:-}
+      WARDEN_METERLESS_MODEL: ${WARDEN_METERLESS_MODEL:-}

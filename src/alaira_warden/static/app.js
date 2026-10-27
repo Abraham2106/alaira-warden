@@ -48,12 +48,14 @@ const LABELS = { budget_exhausted: "Budget exhausted", awaiting_review: "Awaitin
 function label(value) { if (value === null || value === undefined || value === "") return "—"; const text = String(value); return LABELS[text] || (text.charAt(0).toUpperCase() + text.slice(1)).replace(/[_-]+/g, " "); }
 const EXPOSURE = { undetermined: "Undetermined", not_affected: "Not affected", potential: "Potential", confirmed: "Confirmed" };
 const ADVISORY = /(GHSA-[23456789cfghjmpqrvwx]{4}-[23456789cfghjmpqrvwx]{4}-[23456789cfghjmpqrvwx]{4}|CVE-\d{4}-\d{4,})/i;
-const state = { token: "", authenticated: false, api: false, database: false, applications: null, investigations: null, integrations: null, context: null, snapshots: [], crew: [], activity: [], appError: "", caseError: "", loading: false, search: "", filter: "all", settingsTab: "general", selectedCase: "", contextFor: "", preview: null, updated: null };
+const state = { token: "", authenticated: false, api: false, database: false, applications: null, investigations: null, integrations: null, context: null, snapshots: [], crew: [], activity: [], appError: "", caseError: "", loading: false, search: "", filter: "all", settingsTab: "general", selectedCase: "", contextFor: "", preview: null, updated: null, inventory: {}, pending: new Set() };
+const SYNC_ACTIONS = new Set(["nav-toggle", "close-modal", "settings-tab", "integration-filter"]);
 let toastTimer;
+let searchTimer;
 let refreshSequence = 0;
 
 function badge(text, variant = "") { return `<span class="badge ${variant}">${escapeHTML(text)}</span>`; }
-function button(text, action, glyph = "", primary = false, disabled = false, title = "") { return `<button type="button" class="button${primary ? " primary" : ""}" data-action="${action}"${disabled ? " disabled" : ""}${title ? ` title="${escapeHTML(title)}"` : ""}>${glyph ? icon(glyph) : ""}${escapeHTML(text)}</button>`; }
+function button(text, action, glyph = "", primary = false, disabled = false, title = "") { const busy = state.pending.has(action); return `<button type="button" class="button${primary ? " primary" : ""}" data-action="${action}"${disabled || busy ? " disabled" : ""}${busy ? ' aria-busy="true" data-busy' : ""}${title ? ` title="${escapeHTML(title)}"` : ""}>${glyph ? icon(glyph) : ""}${escapeHTML(text)}</button>`; }
 function heading(title, description, actions = "") { return `<div class="page-header"><div><h1>${escapeHTML(title)}</h1><p>${escapeHTML(description)}</p></div><div class="page-actions">${actions}</div></div>`; }
 function empty(title, description, glyph = "cases", action = "", large = false) { return `<div class="empty-state${large ? " large" : ""}"><div class="empty-illustration">${icon(glyph)}</div><h3>${escapeHTML(title)}</h3><p>${escapeHTML(description)}</p>${action}</div>`; }
 function panel(title, body, trailing = "", caption = "") { return `<section class="section-panel"><div class="section-heading"><h2>${escapeHTML(title)}</h2>${trailing}</div>${body}${caption ? `<div class="section-caption">${icon("info")}${escapeHTML(caption)}</div>` : ""}</section>`; }
@@ -83,6 +85,48 @@ function metric(label, value, foot, glyph) { return `<article class="metric"><di
 function statusBadge(value) { return badge(STATUS[value] || value || "To investigate", value === "detected" || !value ? "sand" : value === "awaiting_review" ? "green" : ""); }
 function exposureBadge(value) { return badge(EXPOSURE[value] || value || "Undetermined", value === "confirmed" ? "accent" : value === "potential" ? "sand" : value === "not_affected" ? "green" : ""); }
 function caseRows(rows) { return rows.map((item) => `<tr><td><button class="row-link" data-action="case-detail" data-id="${escapeHTML(item.id)}">${escapeHTML(item.title)}</button><small>${escapeHTML(state.applications?.find((app) => app.id === item.application_id)?.name || "Registered application")}</small></td><td>${statusBadge(item.status)}</td><td>${exposureBadge(item.exposure)}</td><td class="row-arrow" aria-hidden="true">›</td></tr>`).join(""); }
+async function loadInventory(id) {
+  try { const body = await api(`/api/applications/${id}/inventory`); state.inventory[id] = { snapshots: body.snapshots || [], deployments: body.deployments || [] }; }
+  catch { state.inventory[id] = null; }
+  return state.inventory[id];
+}
+async function loadInventories() {
+  await Promise.allSettled((state.applications || []).slice(0, 25).map((app) => loadInventory(app.id)));
+  const current = route();
+  if (current.page === "applications" && !current.id) refreshResults();
+  else if (current.page === "overview" || current.page === "applications") render();
+}
+function inventoryBadge(id) {
+  const inventory = state.inventory[id];
+  if (inventory === undefined) return badge("Checking…");
+  if (!inventory) return badge("Unavailable");
+  if (!inventory.snapshots.length) return badge("Not built", "sand");
+  return badge(`Ready · ${date(inventory.snapshots[0].observed_at)}`, "green");
+}
+function setupSteps() {
+  const apps = state.applications || [];
+  const steps = [
+    ["Connect environment", "Use the local token to read your workspace.", state.authenticated, button("Connect environment", "connect", "plug", true)],
+    ["Register an application", "Add the npm repository you want to protect.", apps.length > 0, button("Register application", "new-app", "plus", true)],
+    ["Generate inventory", "Resolve the lockfile for a verifiable commit.", apps.some((app) => state.inventory[app.id]?.snapshots?.length), apps[0] ? `<a class="button primary" href="#applications/${escapeHTML(apps[0].id)}/inventory">${icon("refresh")}Open inventory</a>` : ""],
+    ["Open an investigation", "Register an advisory and link it to the application.", (state.investigations || []).length > 0, button("New investigation", "new-case", "plus", true)],
+    ["Start a run", "The crew gathers evidence one stage at a time.", false, ""],
+  ];
+  const next = steps.findIndex(([, , done]) => !done);
+  return `<section class="setup-steps" aria-labelledby="setup-title"><h2 id="setup-title">Get started</h2><ol>${steps.map(([title, sub, done, action], index) => `<li class="${done ? "done" : index === next ? "current" : ""}"${index === next ? ' aria-current="step"' : ""}><span class="setup-mark" aria-hidden="true">${done ? "✓" : index + 1}</span><div><strong>${title}</strong><small>${sub}</small>${done ? '<span class="sr-only">Done.</span>' : ""}${index === next && !state.loading ? action : ""}</div></li>`).join("")}</ol></section>`;
+}
+function timelineEvents(page = route().page) { return page === "overview" ? (state.activity?.length ? state.activity : (state.context?.agents || [])) : (state.activity || []); }
+function timelineRegion(events) { return `<div id="crew-timeline">${agentTimeline(events)}</div><p id="timeline-status" class="sr-only" aria-live="polite"></p>`; }
+function activityKey(rows) { return (rows || []).map((row) => row.id || row.created_at).join("|"); }
+function refreshTimeline(added) {
+  const region = $("crew-timeline");
+  if (!region) return;
+  const events = timelineEvents();
+  region.innerHTML = agentTimeline(events);
+  const counter = $("timeline-count");
+  if (counter) counter.innerHTML = route().page === "overview" ? badge(events.length ? `${events.length} acts` : "Live") : badge(String(events.length));
+  if (added > 0) $("timeline-status").textContent = `${added} new agent ${added === 1 ? "act" : "acts"}.`;
+}
 function accessEmpty(type = "investigations") {
   const isApp = type === "applications";
   if (state.loading) return `<div class="loading-line"></div>${empty("Loading environment", "Fetching available data…", "refresh")}`;
@@ -102,10 +146,11 @@ function agentTimeline(events) {
 }
 function panorama() {
   const cases = state.investigations;
-  const events = state.activity?.length ? state.activity : (state.context?.agents || []);
+  const events = timelineEvents("overview");
+  const onboarding = !state.authenticated || !state.applications?.length || !cases?.length;
   return heading("Agents investigate. You decide.", `${state.crew.length ? `${state.crew.length} specialized roles` : "Specialized roles"}, stateful orchestration, and no model conclusion treated as evidence.`, button("Refresh", "refresh", "refresh") + button("Run agent demo", "demo-run", "signal", true) + button("New investigation", "new-case", "plus")) + crewStrip() +
-    `<div class="metrics">${metric("Registered applications", count(state.applications), state.applications ? "In workspace" : "Connect your environment", "apps")}${metric("Investigations", count(cases), cases ? "Advisories recorded" : "No environment data", "cases")}${metric("Confirmed exposure", cases ? String(cases.filter((item) => item.exposure === "confirmed").length) : "—", cases ? "Per deterministic correlation" : '<span class="tiny-dot"></span>No environment data', "check")}${metric("Data layer", state.context?.data_layer === "zetaris" ? "Zetaris" : cases ? "Local" : "—", state.context?.sponsor_data_layer_verified ? "Zetaris read verified" : "Local mode; Zetaris not verified", "layers")}</div>` +
-    `<div class="content-grid"><div>${panel("Crew timeline", agentTimeline(events), badge(events.length ? `${events.length} acts` : "Live"), "Warden orchestrates. The Arbiter classifies. Nightshift proposes. Merge is prohibited.")}${panel("Recent investigations", cases?.length ? table(["Investigation", "Status", "Exposure", ""], caseRows(cases.slice(0, 5))) : accessEmpty(), `<a class="text-link" href="#investigations">Open investigations ${icon("arrow")}</a>`)}</div><aside class="overview-aside">${flowPanel()}<section class="next-step"><div class="eyebrow">3-MINUTE DEMO</div><h3>Watch the agents collaborate with no external APIs.</h3><p>The demo uses labeled synthetic sources and a Nightshift mock. H-MEM and npm correlation are real code.</p>${button("Run agent demo", "demo-run", "signal", true)}</section></aside></div>` +
+    (onboarding ? setupSteps() : `<div class="metrics">${metric("Registered applications", count(state.applications), state.applications ? "In workspace" : "Connect your environment", "apps")}${metric("Investigations", count(cases), cases ? "Advisories recorded" : "No environment data", "cases")}${metric("Confirmed exposure", cases ? String(cases.filter((item) => item.exposure === "confirmed").length) : "—", cases ? "Per deterministic correlation" : '<span class="tiny-dot"></span>No environment data', "check")}${metric("Data layer", state.context?.data_layer === "zetaris" ? "Zetaris" : cases ? "Local" : "—", state.context?.sponsor_data_layer_verified ? "Zetaris read verified" : "Local mode; Zetaris not verified", "layers")}</div>`) +
+    `<div class="content-grid"><div>${panel("Crew timeline", timelineRegion(events), `<span id="timeline-count">${badge(events.length ? `${events.length} acts` : "Live")}</span>`, "Warden orchestrates. The Arbiter classifies. Nightshift proposes. Merge is prohibited.")}${panel("Recent investigations", cases?.length ? table(["Investigation", "Status", "Exposure", ""], caseRows(cases.slice(0, 5))) : accessEmpty(), `<a class="text-link" href="#investigations">Open investigations ${icon("arrow")}</a>`)}</div><aside class="overview-aside">${flowPanel()}<section class="next-step"><div class="eyebrow">3-MINUTE DEMO</div><h3>Watch the agents collaborate with no external APIs.</h3><p>The demo uses labeled synthetic sources and a Nightshift mock. H-MEM and npm correlation are real code.</p>${button("Run agent demo", "demo-run", "signal", true)}</section></aside></div>` +
     `<div class="bottom-sources"><span>Intelligence sources</span>${CATALOG.slice(0, 4).map((item) => `<a href="#integrations" class="source-chip"><span class="source-icon">${item.mark}</span>${item.name}<span class="status-dot" title="Pending implementation"></span></a>`).join("")}<a class="text-link" href="#integrations">View integrations ${icon("arrow")}</a></div>`;
 }
 function overview() { return panorama(); }
@@ -164,34 +209,41 @@ function agentsPage() {
   return heading("Crew", "Logical responsibilities that share services while keeping their own permissions and traces.", button("Run agent demo", "demo-run", "signal", true)) +
     note("Mocks are labeled.", "The demo does not contact Nightshift, Zetaris, or NVIDIA. H-MEM and npm correlation are real.") +
     roster +
-    panel("Live activity", agentTimeline(state.activity || []), badge(state.activity?.length ? String(state.activity.length) : "0"), "Each act has agent, stage, decision, and timestamp. The log is append-only.");
+    panel("Live activity", timelineRegion(state.activity || []), `<span id="timeline-count">${badge(state.activity?.length ? String(state.activity.length) : "0")}</span>`, "Each act has agent, stage, decision, and timestamp. The log is append-only.");
 }
 function flowPanel() {
   const steps = [["Detection", "Sources and advisories", "signal"], ["Investigation", "Evidence and exposure", "search"], ["Remediation", "Plan and proposed change", "patch"], ["Validation", "Tests and analysis", "check"], ["Human review", "Decision and PR handoff", "approval"]];
   return panel("Response flow", `<ol class="flow-list">${steps.map(([name, sub, glyph]) => `<li><span class="flow-step">${icon(glyph)}</span><div><strong>${name}</strong><small>${sub}</small></div></li>`).join("")}</ol><div class="aside-note">${icon("lock")}Warden orchestrates. The Arbiter classifies. Nightshift, when present, only proposes. Merge is prohibited.</div>`, badge("Agents"));
 }
 function listToolbar(kind) { return `<div class="toolbar"><label class="search-field" for="list-search">${icon("search")}<input id="list-search" type="search" placeholder="${kind === "applications" ? "Search application or repository" : "Search by investigation title"}" value="${escapeHTML(state.search)}" aria-label="Search ${kind}"></label><div class="filters"><span class="badge">${kind === "applications" ? "Node.js / npm" : "All advisories"}</span></div></div>`; }
+function applicationResults() {
+  const rows = state.applications?.filter((item) => `${item.name} ${item.repository}`.toLowerCase().includes(state.search.toLowerCase()));
+  return rows?.length ? table(["Application", "Ecosystem", "Inventory", ""], rows.map((item) => `<tr><td><button class="row-link" data-action="app-detail" data-id="${escapeHTML(item.id)}">${escapeHTML(item.name)}</button><small>${escapeHTML(item.repository)}</small></td><td>${badge("npm")}</td><td>${inventoryBadge(item.id)}</td><td class="row-arrow" aria-hidden="true">›</td></tr>`).join("")) : state.search && state.applications?.length ? empty("No matches", "Try another name or repository.", "search") : accessEmpty("applications");
+}
+function refreshResults() { const results = $("list-results"); if (results) results.innerHTML = applicationResults(); }
 function applicationsPage(id, tab) {
   if (id) return applicationDetail(id, tab);
-  const rows = state.applications?.filter((item) => `${item.name} ${item.repository}`.toLowerCase().includes(state.search.toLowerCase()));
   return heading("Applications", "Technology context that links each threat to your environment.", button("Register application", "new-app", "plus", true)) +
-    panel("Workspace repositories", listToolbar("applications") + (rows?.length ? table(["Application", "Ecosystem", "Inventory", ""], rows.map((item) => `<tr><td><button class="row-link" data-action="app-detail" data-id="${escapeHTML(item.id)}">${escapeHTML(item.name)}</button><small>${escapeHTML(item.repository)}</small></td><td>${badge("npm")}</td><td>${badge("Pending")}</td><td class="row-arrow" aria-hidden="true">›</td></tr>`).join("")) : state.search && state.applications?.length ? empty("No matches", "Try another name or repository.", "search") : accessEmpty("applications"))) +
+    panel("Workspace repositories", listToolbar("applications") + `<div id="list-results">${applicationResults()}</div>`) +
     `<div class="feature-columns"><div class="feature-description"><h3>Versioned inventory</h3><p>Direct and transitive dependencies tied to a verifiable commit.</p></div><div class="feature-description"><h3>Deployment context</h3><p>Environments and history to investigate past exposure.</p></div><div class="feature-description"><h3>Explicit coverage</h3><p>Partial or stale inventories will be shown as such.</p></div></div>`;
 }
 function tabs(items, selected, prefix) { return `<nav class="tabs" aria-label="Detail sections">${items.map(([key, label]) => `<a class="tab" href="#${prefix}/${key}"${selected === key ? ' aria-current="page"' : ""}>${label}</a>`).join("")}</nav>`; }
 function applicationDetail(id, tab) {
   const app = state.applications?.find((item) => item.id === id);
+  const inventory = state.inventory[id];
   if (!app) return heading("Application detail", "Select a registered application to view its context.") + panel("Application unavailable", accessEmpty("applications"));
   const selected = ["overview", "inventory", "deployments"].includes(tab) ? tab : "overview";
   let body = "";
   if (selected === "overview") body = panel("Application information", `<div class="section-body"><dl class="properties"><dt>Name</dt><dd>${escapeHTML(app.name)}</dd><dt>Repository</dt><dd>${escapeHTML(app.repository)}</dd><dt>Ecosystem</dt><dd>Node.js / npm</dd><dt>Registered</dt><dd>${escapeHTML(date(app.created_at))}</dd><dt>Inventory</dt><dd>${badge(state.snapshots.length ? `${state.snapshots.length} snapshot${state.snapshots.length === 1 ? "" : "s"}` : "Not generated", state.snapshots.length ? "green" : "sand")}</dd><dt>Deployments</dt><dd>No imported data</dd></dl></div>`);
   if (selected === "inventory") {
-    const snapshots = state.snapshots || [];
+    const snapshots = inventory?.snapshots || state.snapshots || [];
     body = snapshots.length
       ? panel("Components and dependencies", table(["Commit", "Observed", "Warnings"], snapshots.map((row) => `<tr><td><code>${escapeHTML((row.commit_ref || row.commit_sha || "").slice(0, 12))}</code></td><td>${escapeHTML(date(row.observed_at))}</td><td>${badge(Array.isArray(row.warnings) && row.warnings.length ? String(row.warnings.length) : "None")}</td></tr>`).join("")), button("Refresh inventory", "refresh-inventory", "refresh"), "Snapshot resolves via GitHub. Real Syft is still pending.")
       : panel("Components and dependencies", empty("Inventory not built yet", "Resolve the commit lockfile to correlate versions.", "layers", button("Generate inventory", "refresh-inventory", "refresh"), true), badge("Pending"), "Real Syft is still pending; this snapshot does not assert a container SBOM.");
   }
-  if (selected === "deployments") body = panel("Deployment history", empty("No deployments imported", "Each record will identify environment, artifact, period, and source to assess historical exposure.", "clock", button("Import deployments", "none", "download", false, true, "Historical import is pending."), true), badge("Pending"));
+  const deployments = inventory?.deployments || [];
+  if (selected === "deployments" && deployments.length) body = panel("Deployment history", table(["Environment", "Artifact", "Deployed", "Retired", "Source"], deployments.map((row) => `<tr><td>${badge(label(row.environment))}</td><td><code>${escapeHTML(row.artifact_ref)}</code></td><td>${escapeHTML(date(row.deployed_at))}</td><td>${row.retired_at ? escapeHTML(date(row.retired_at)) : badge("Active", "green")}</td><td><small>${escapeHTML(row.source_reference)}</small></td></tr>`).join("")), badge(`${deployments.length} ${deployments.length === 1 ? "record" : "records"}`), "Imported records only. Exposure windows use these dates.");
+  else if (selected === "deployments") body = panel("Deployment history", empty("No deployments imported", "Each record will identify environment, artifact, period, and source to assess historical exposure.", "clock", button("Import deployments", "none", "download", false, true, "Historical import is pending."), true), badge("Pending"));
   return `<a class="back-link" href="#applications">${icon("back")}All applications</a>` + heading(app.name, app.repository, button("Generate inventory", "refresh-inventory", "refresh")) + tabs([["overview", "General"], ["inventory", "Inventory"], ["deployments", "Deployments"]], selected, `applications/${escapeHTML(id)}`) + body;
 }
 function integrationsPage() {
@@ -275,6 +327,7 @@ async function refreshData(silent = false) {
     state.appError = results[0].status === "rejected" ? results[0].reason.message : "";
     state.caseError = results[1].status === "rejected" ? results[1].reason.message : "";
     state.updated = new Date();
+    loadInventories();
     const current = selectedInvestigation();
     if (current) await loadCaseExtras(current, sequence);
     if (!silent) announce(state.appError || state.caseError ? "Partial connection: adapters were queried, but environment data is missing." : "Data updated.", state.appError ? "" : "success");
@@ -440,10 +493,7 @@ async function performAction(action, target) {
     }
   }
   if (action === "app-detail") {
-    try {
-      const inventory = await api(`/api/applications/${target.dataset.id}/inventory`);
-      state.snapshots = inventory.snapshots || [];
-    } catch { state.snapshots = []; }
+    state.snapshots = (await loadInventory(target.dataset.id))?.snapshots || [];
     navigate(`applications/${target.dataset.id}`);
   }
   if (action === "settings-tab") { state.settingsTab = target.dataset.tab; render(); }
@@ -466,16 +516,35 @@ async function performAction(action, target) {
     finally { target.disabled = false; target.setAttribute("aria-busy", "false"); }
   }
 }
+async function runAction(action, target) {
+  if (state.pending.has(action)) return;
+  const tracked = target.matches("button") && !SYNC_ACTIONS.has(action);
+  let slow;
+  if (tracked) {
+    state.pending.add(action); target.disabled = true; target.setAttribute("aria-busy", "true");
+    slow = setTimeout(() => announce("Still working. Long steps can take up to two minutes.", "busy"), 2500);
+  }
+  try { await performAction(action, target); }
+  catch (error) { announce(error.message, "error"); }
+  finally {
+    if (tracked) {
+      clearTimeout(slow); state.pending.delete(action);
+      if ($("toast").classList.contains("busy")) $("toast").hidden = true;
+      document.querySelectorAll(`[data-action="${action}"][data-busy]`).forEach((node) => { node.disabled = false; node.removeAttribute("aria-busy"); node.removeAttribute("data-busy"); });
+      if (target.isConnected) { target.disabled = false; target.removeAttribute("aria-busy"); }
+    }
+  }
+}
 document.addEventListener("click", (event) => {
   const target = event.target.closest("[data-action]");
-  if (target && !target.disabled) performAction(target.dataset.action, target).catch((error) => announce(error.message, "error"));
+  if (target && !target.disabled) runAction(target.dataset.action, target);
   if (event.target.closest(".nav-item")) closeNavigation();
 });
 document.addEventListener("input", (event) => {
   if (event.target.validity?.valid) event.target.removeAttribute("aria-invalid");
   if (event.target.id === "list-search") {
-    const input = event.target; state.search = input.value; const position = input.selectionStart; render();
-    const replacement = $("list-search"); replacement.focus(); if (position !== null) replacement.setSelectionRange(position, position);
+    state.search = event.target.value;
+    clearTimeout(searchTimer); searchTimer = setTimeout(refreshResults, 150);
   }
 });
 document.addEventListener("invalid", (event) => { event.target.setAttribute("aria-invalid", "true"); }, true);
@@ -524,10 +593,7 @@ window.addEventListener("hashchange", () => {
   state.search = "";
   const current = route();
   if (current.page === "applications" && current.id && state.token) {
-    api(`/api/applications/${current.id}/inventory`).then((inventory) => {
-      state.snapshots = inventory.snapshots || [];
-      render();
-    }).catch(() => { render(); });
+    loadInventory(current.id).then((inventory) => { state.snapshots = inventory?.snapshots || []; render(); });
   }
   if (current.page === "investigations") {
     const item = selectedInvestigation();
@@ -553,9 +619,10 @@ refreshHealth();
 setInterval(() => {
   if (document.hidden || $("modal").open) return;
   const apply = (rows) => {
+    const before = new Set((state.activity || []).map((row) => row.id || row.created_at));
+    if (activityKey(rows) === activityKey(state.activity)) return;
     state.activity = rows;
-    const page = route().page;
-    if (page === "overview" || page === "agents") render();
+    refreshTimeline(rows.filter((row) => !before.has(row.id || row.created_at)).length);
   };
   if (state.token) {
     api("/api/agents/activity").then(apply).catch(() => {});

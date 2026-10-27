@@ -23,7 +23,7 @@ const ICONS = {
 };
 const icon = (name) => `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="${ICONS[name] || ICONS.info}"/></svg>`;
 const NAV = [
-  ["overview", "Operations center", "overview", "OPERATIONS"], ["agents", "Crew", "layers"],
+  ["overview", "Operations center", "overview", "OPERATIONS"],
   ["applications", "Applications", "apps"],
   ["integrations", "Integrations", "plug", "WORKSPACE"], ["settings", "Settings", "settings"],
 ];
@@ -38,14 +38,12 @@ const CATALOG = [
   ["meterless", "Nightshift", "N", "model-access", "hackathon", "Primary AI via the Nightshift hotspot (Meterless Runtime)."],
   ["hmem", "H-MEM", "H", "engine", "hackathon", "Local memory engine. Proof is the official suite, not the network."],
   ["nvidia", "NVIDIA", "NV", "model", "candidate", "Configure Nemotron in Nightshift Providers, not in Warden."],
-  ["grok", "Grok / X", "G", "research", "conditional", "Research reports and technical publications."],
   ["zetaris", "Zetaris", "Z", "data", "hackathon", "Mandatory data layer. Local mode does not attest the sponsor."],
-  ["cursor", "Cursor", "C", "engineering", "conditional", "Change automation, subject to an available interface."],
 ].map(([id, name, mark, kind, scope, description]) => ({ id, name, mark, kind, scope, description, verified: false, status: "not_implemented" }));
 const STATUS = { detected: "To investigate", investigating: "In progress", awaiting_review: "Under review", requires_intervention: "Needs intervention", closed: "Closed", cancelled: "Cancelled" };
 const EXPOSURE = { undetermined: "Undetermined", not_affected: "Not affected", potential: "Potential", confirmed: "Confirmed" };
 const ADVISORY = /(GHSA-[23456789cfghjmpqrvwx]{4}-[23456789cfghjmpqrvwx]{4}-[23456789cfghjmpqrvwx]{4}|CVE-\d{4}-\d{4,})/i;
-const state = { token: "", authenticated: false, api: false, database: false, applications: null, investigations: null, integrations: null, context: null, snapshots: [], crew: [], activity: [], appError: "", caseError: "", loading: false, search: "", filter: "all", settingsTab: "general", operationView: "panorama", selectedCase: "", preview: null, updated: null };
+const state = { token: "", authenticated: false, api: false, database: false, applications: null, investigations: null, integrations: null, context: null, snapshots: [], crew: [], activity: [], appError: "", caseError: "", loading: false, search: "", filter: "all", settingsTab: "general", operationView: "panorama", selectedCase: "", deployments: [], inventoryError: "", contextError: "", updated: null };
 let toastTimer;
 let refreshSequence = 0;
 
@@ -79,7 +77,11 @@ function renderChrome() {
 function metric(label, value, foot, glyph) { return `<article class="metric"><div class="metric-head"><span>${label}</span>${icon(glyph)}</div><div class="metric-value${value === "—" ? " pending" : ""}">${value}</div><div class="metric-foot">${foot}</div></article>`; }
 function statusBadge(value) { return badge(STATUS[value] || value || "To investigate", value === "detected" || !value ? "sand" : value === "awaiting_review" ? "green" : ""); }
 function exposureBadge(value) { return badge(EXPOSURE[value] || value || "Undetermined", value === "confirmed" ? "accent" : value === "potential" ? "sand" : value === "not_affected" ? "green" : ""); }
-function caseRows(rows) { return rows.map((item) => `<tr><td><button class="row-link" data-action="case-detail" data-id="${escapeHTML(item.id)}">${escapeHTML(item.title)}</button><small>${escapeHTML(state.applications?.find((app) => app.id === item.application_id)?.name || "Registered application")}</small></td><td>${statusBadge(item.status)}</td><td>${exposureBadge(item.exposure)}</td><td class="row-arrow">↗</td></tr>`).join(""); }
+function isSampleCase(item) {
+  const app = state.applications?.find((entry) => entry.id === item?.application_id);
+  return item?.description?.startsWith("Guided agent demo. Synthetic sources.") || app?.repository?.startsWith("demo-org/") || false;
+}
+function caseRows(rows) { return rows.map((item) => `<tr><td><button class="row-link" data-action="case-detail" data-id="${escapeHTML(item.id)}">${escapeHTML(item.title)}</button>${isSampleCase(item) ? badge("Synthetic sample", "sand") : ""}<small>${escapeHTML(state.applications?.find((app) => app.id === item.application_id)?.name || "Registered application")}</small></td><td>${statusBadge(item.status)}</td><td>${exposureBadge(item.exposure)}</td><td class="row-arrow">↗</td></tr>`).join(""); }
 function accessEmpty(type = "investigations") {
   const isApp = type === "applications";
   if (state.loading) return `<div class="loading-line"></div>${empty("Loading environment", "Fetching available data…", "refresh")}`;
@@ -88,27 +90,22 @@ function accessEmpty(type = "investigations") {
   if (!state.authenticated) return empty(isApp ? "Learn your environment" : "Your next investigation starts here", isApp ? "Connect your environment to register applications and prepare inventory." : "Connect the environment to collect advisories that need review.", isApp ? "apps" : "cases", button("Connect environment", "connect", "plug", true));
   return empty(isApp ? "Add your first application" : "No investigations yet", isApp ? "Register a repository to start building security context." : "Register a manual advisory and link it to an application.", isApp ? "apps" : "cases", button(isApp ? "Register application" : "New investigation", isApp ? "new-app" : "new-case", "plus", true));
 }
-function crewStrip() {
-  const crew = state.crew || [];
-  if (!crew.length) return "";
-  return `<div class="crew-strip" aria-label="Agent crew">${crew.map((agent) => `<article class="crew-chip"><strong>${escapeHTML(agent.name)}</strong><small>${escapeHTML(agent.role)}</small></article>`).join("")}</div>`;
-}
 function agentTimeline(events) {
-  if (!events?.length) return empty("Agents have not acted yet", "Run the guided demo or start a run. Every decision is recorded on this timeline.", "layers", state.authenticated ? button("Run agent demo", "demo-run", "signal", true) : button("Connect environment", "connect", "plug", true));
+  if (!events?.length) return empty("Agents have not acted yet", "Start an investigation run to record activity here.", "layers", state.authenticated ? "" : button("Connect environment", "connect", "plug", true));
   return `<ol class="agent-timeline">${events.map((event) => `<li class="agent-event ${escapeHTML(event.status)}"><div><strong>${escapeHTML((state.crew.find((item) => item.id === event.agent) || { name: event.agent }).name)}</strong><small>${escapeHTML(event.stage)} · ${escapeHTML(event.status)}</small></div><p>${escapeHTML(event.summary)}</p><time>${escapeHTML(date(event.created_at))}</time></li>`).join("")}</ol>`;
 }
 function panorama() {
   const cases = state.investigations;
   const events = state.activity?.length ? state.activity : (state.context?.agents || []);
-  return heading("Agents investigate. You decide.", "Eleven roles, stateful orchestration, and no model conclusion treated as evidence.", button("Refresh", "refresh", "refresh") + button("Run agent demo", "demo-run", "signal", true) + button("New investigation", "new-case", "plus")) + crewStrip() + operationViews() +
+  return heading("Agents investigate. You decide.", "Eleven roles, stateful orchestration, and no model conclusion treated as evidence.", button("Refresh", "refresh", "refresh") + button("New investigation", "new-case", "plus", true)) + operationViews() +
     `<div class="metrics">${metric("Registered applications", count(state.applications), state.applications ? "In workspace" : "Connect your environment", "apps")}${metric("Investigations", count(cases), cases ? "Advisories recorded" : "No environment data", "cases")}${metric("Confirmed exposure", cases ? String(cases.filter((item) => item.exposure === "confirmed").length) : "—", cases ? "Per deterministic correlation" : '<span class="tiny-dot"></span>No environment data', "check")}${metric("Data layer", state.context?.data_layer === "zetaris" ? "Zetaris" : cases ? "Local" : "—", state.context?.sponsor_data_layer_verified ? "Zetaris read verified" : "Local mode does not attest the sponsor", "layers")}</div>` +
-    `<div class="content-grid"><div>${panel("Crew timeline", agentTimeline(events), badge(events.length ? `${events.length} acts` : "Live"), "Warden orchestrates. The Arbiter classifies. Nightshift proposes. Merge is prohibited.")}${panel("Recent investigations", cases?.length ? table(["Investigation", "Status", "Exposure", ""], caseRows(cases.slice(0, 5))) : accessEmpty(), `<button type="button" class="text-link" data-action="operation-view" data-view="case">Open investigation ${icon("arrow")}</button>`)}</div><aside class="overview-aside">${flowPanel()}<section class="next-step"><div class="eyebrow">3-MINUTE DEMO</div><h3>Watch agents collaborate without sponsor APIs.</h3><p>The demo uses labeled synthetic sources and a Nightshift mock. H-MEM and npm correlation are real code.</p>${button("Run agent demo", "demo-run", "signal", true)}</section></aside></div>` +
-    `<div class="bottom-sources"><span>Intelligence sources</span>${CATALOG.slice(0, 4).map((item) => `<a href="#integrations" class="source-chip"><span class="source-icon">${item.mark}</span>${item.name}<span class="status-dot" title="Pending implementation"></span></a>`).join("")}<a class="text-link" href="#integrations">View integrations ${icon("arrow")}</a></div>`;
+    `<div class="content-grid"><div>${panel("Crew timeline", agentTimeline(events), badge(events.length ? `${events.length} acts` : "Live"), "Warden orchestrates. The Arbiter classifies. Nightshift proposes. Merge is prohibited.")}${panel("Recent investigations", cases?.length ? table(["Investigation", "Status", "Exposure", ""], caseRows(cases.slice(0, 5))) : accessEmpty(), `<button type="button" class="text-link" data-action="operation-view" data-view="case">Open investigation ${icon("arrow")}</button>`)}</div><aside class="overview-aside">${flowPanel()}</aside></div>` +
+    `<div class="bottom-sources"><span>Intelligence sources</span>${CATALOG.slice(0, 4).map((item) => `<a href="#integrations" class="source-chip"><span class="source-icon">${item.mark}</span>${item.name}<span class="status-dot" title="View integration status"></span></a>`).join("")}<a class="text-link" href="#integrations">View integrations ${icon("arrow")}</a></div>`;
 }
 function operationViews() {
-  return `<div class="operation-views"><div class="view-presets" aria-label="Operations center view"><button type="button" data-action="operation-view" data-view="panorama" class="view-preset${state.operationView === "panorama" ? " active" : ""}" aria-pressed="${state.operationView === "panorama"}">${icon("overview")}Overview</button><button type="button" data-action="operation-view" data-view="case" class="view-preset${state.operationView === "case" ? " active" : ""}" aria-pressed="${state.operationView === "case"}">${icon("cases")}Investigation and response</button></div><span class="view-range">${icon("clock")}All history</span></div>`;
+  return `<div class="operation-views"><div class="view-presets" aria-label="Operations center view"><button type="button" data-action="operation-view" data-view="panorama" class="view-preset${state.operationView === "panorama" ? " active" : ""}" aria-pressed="${state.operationView === "panorama"}">${icon("overview")}Overview</button><button type="button" data-action="operation-view" data-view="case" class="view-preset${state.operationView === "case" ? " active" : ""}" aria-pressed="${state.operationView === "case"}">${icon("cases")}Investigation and response</button><button type="button" data-action="operation-view" data-view="crew" class="view-preset${state.operationView === "crew" ? " active" : ""}" aria-pressed="${state.operationView === "crew"}">${icon("layers")}Crew</button></div></div>`;
 }
-function overview() { return state.operationView === "case" ? operationsCase() : panorama(); }
+function overview() { return state.operationView === "crew" ? agentsPage() : state.operationView === "case" ? operationsCase() : panorama(); }
 function responseStage(number, name, description, body, status = "Pending") {
   return `<section class="response-stage"><div class="response-stage-heading"><span class="stage-number">${number}</span><div><h3>${name}</h3><p>${description}</p></div>${badge(status)}</div><div class="response-stage-content">${body}</div></section>`;
 }
@@ -122,7 +119,8 @@ function operationsCase() {
   const rows = state.investigations || [];
   const item = selectedInvestigation();
   const app = item && state.applications?.find((entry) => entry.id === item.application_id);
-  const ctx = state.context;
+  const ctx = state.context?.investigation_id && state.context.investigation_id !== item?.id ? null : state.context;
+  const sampleNotice = isSampleCase(item) ? note("Synthetic sample", "This case uses controlled data. It does not prove live sponsor integrations or a deployed correction.") : "";
   const evidenceRows = ctx?.evidence || [];
   const assessments = ctx?.assessments || [];
   const runs = ctx?.runs || [];
@@ -131,7 +129,7 @@ function operationsCase() {
   const latestRun = runs[0];
   const findings = assessments.flatMap((entry) => entry.payload?.findings || []);
   const queue = `<div class="case-queue"><div class="queue-heading"><h2>Investigations</h2>${badge(state.investigations === null ? "—" : String(rows.length))}</div>${state.loading ? '<div class="loading-line"></div>' : ""}${rows.length ? rows.map((entry) => `<button class="case-queue-item${item?.id === entry.id ? " selected" : ""}" data-action="case-detail" data-id="${escapeHTML(entry.id)}" type="button" aria-pressed="${item?.id === entry.id}"><span class="queue-item-icon">${icon("cases")}</span><span><strong>${escapeHTML(entry.title)}</strong><small>${escapeHTML(state.applications?.find((entryApp) => entryApp.id === entry.application_id)?.name || "Registered application")}</small><span class="queue-state">${statusBadge(entry.status)}</span></span></button>`).join("") : `<div class="queue-empty">${icon("cases")}<p>${state.authenticated ? "No investigations available." : "Connect the environment to query advisories."}</p>${button(state.authenticated ? "New advisory" : "Connect", state.authenticated ? "new-case" : "connect", "plus")}</div>`}</div>`;
-  const context = `<div class="case-context"><div><span class="context-label">Application</span><strong>${escapeHTML(app?.name || "Not selected")}</strong><small>${escapeHTML(app?.repository || "Repository pending")}</small></div><div><span class="context-label">Status del aviso</span>${item ? statusBadge(item.status) : badge("Not selected")}</div><div><span class="context-label">Exposure</span>${item ? exposureBadge(item.exposure) : badge("Undetermined")}</div><div><span class="context-label">Data layer</span><span>${escapeHTML(ctx?.data_layer || "local")}${ctx?.sponsor_data_layer_verified ? " · Zetaris verified" : ""}</span></div></div>`;
+  const context = `<div class="case-context"><div><span class="context-label">Application</span><strong>${escapeHTML(app?.name || "Not selected")}</strong><small>${escapeHTML(app?.repository || "Repository pending")}</small></div><div><span class="context-label">Advisory status</span>${item ? statusBadge(item.status) : badge("Not selected")}</div><div><span class="context-label">Exposure</span>${item ? exposureBadge(item.exposure) : badge("Undetermined")}</div><div><span class="context-label">Data layer</span><span>${escapeHTML(ctx?.data_layer || "Not loaded")}${ctx?.sponsor_data_layer_verified ? " · Zetaris verified" : ""}</span></div></div>`;
   const evidence = `<section class="case-block"><div class="case-block-heading"><h3>${icon("search")}Evidence and context</h3>${badge(evidenceRows.length ? `${evidenceRows.length} records` : "Uncorroborated", evidenceRows.length ? "green" : "sand")}</div><div class="case-block-body">${item ? `<p>${escapeHTML(item.description)}</p><div class="source-reference"><span class="source-icon">↗</span><div><small>Reference provided</small><a href="${escapeHTML(item.source_url)}" target="_blank" rel="noopener noreferrer">${escapeHTML(item.source_url)}</a></div></div>${evidenceRows.length ? `<ul class="timeline">${evidenceRows.slice(0, 6).map((row) => `<li>${escapeHTML(row.source || "source")} · ${escapeHTML(row.source_identifier || "")}<small>${escapeHTML((row.excerpt || "").slice(0, 180))}</small></li>`).join("")}</ul>` : ""}` : '<p>Select an advisory to gather sources, description, and application data here.</p>'}<p class="inline-pending">A version match does not confirm compromise.</p></div></section>`;
   const exposure = `<section class="case-block"><div class="case-block-heading"><h3>${icon("check")}Exposure assessment</h3>${item ? exposureBadge(item.exposure) : badge("Not assessed")}</div><div class="case-block-body"><div class="exposure-checks">${(findings.length ? findings.slice(0, 6).map((finding) => `<div><span>${escapeHTML(finding.package_name || "component")} ${escapeHTML(finding.resolved_version || "")}</span><span>${escapeHTML(finding.exposure || "undetermined")}</span></div>`) : ["Affected version", "Presence in environment", "Historical deployment", "Exploitation conditions"].map((label) => `<div><span>${label}</span><span>No evidence</span></div>`)).join("")}</div><p class="inline-pending">H-MEM reinjects context and does not assign exposure. ${memory?.available ? "Recall available." : "No recall yet."}</p></div></section>`;
   const planRow = ctx?.plans?.[0];
@@ -142,21 +140,20 @@ function operationsCase() {
   const patchPayload = patchRow?.payload || {};
   const validationPayload = validationRow?.payload || {};
   const plan = responseStage("01", "Response plan", "Action, evidence, compatibility, validation, and rollback.", planRow ? `<div class="stage-placeholders"><div><span>Action</span><p>${escapeHTML(planPayload.action || "—")}</p></div><div><span>Packages</span><p>${escapeHTML((planPayload.packages || []).join(", ") || "None")}</p></div><div><span>Rollback</span><p>${escapeHTML(planPayload.rollback || "—")}</p></div></div><p>${escapeHTML(planPayload.justification || "")}</p><p class="inline-pending">${escapeHTML(planPayload.compromise_follow_up || "")}</p>` : `<div class="stage-placeholders"><div><span>Strategy</span><p>No recommendation until exposure is assessed.</p></div><div><span>Compatibility</span><p>No analysis recorded.</p></div><div><span>Rollback</span><p>Will be defined with the proposal.</p></div></div>`, planRow ? String(planPayload.action || "Ready") : "Pending");
-  const patch = responseStage("02", "Proposed change", "Isolated diff. Merge remains prohibited.", patchRow ? `<div class="diff-scaffold"><div class="diff-file-list">${icon("cases")}<span>${escapeHTML((patchPayload.files || []).join(", ") || "No files")}</span></div><pre class="code-panel">${escapeHTML(patchPayload.diff || patchPayload.note || "")}</pre></div><div class="stage-footer"><span>${escapeHTML(patchPayload.note || "Labeled diff")}</span>${button("Attempt merge", "forbid-merge", "lock", false, false, "RF-37: the Guardian rejects merge, deploy, and secrets.")}</div>` : `<div class="diff-scaffold"><div class="diff-file-list">${icon("cases")}<span>No files modificados</span></div><div class="diff-empty">${icon("patch")}<span>The diff appears when Patchwright prepares an isolated change.</span></div></div><div class="stage-footer"><span>No PR is published in the MVP</span>${button("Attempt merge", "forbid-merge", "lock", false, !item)}</div>`, patchRow ? "Isolated" : "Pending");
+  const patch = responseStage("02", "Proposed change", "Recorded changes and their execution status.", patchRow ? `<div class="diff-scaffold"><div class="diff-file-list">${icon("cases")}<span>${escapeHTML((patchPayload.files || []).join(", ") || "No files")}</span></div><pre class="code-panel">${escapeHTML(patchPayload.diff || patchPayload.note || "")}</pre></div><div class="stage-footer"><span>${escapeHTML(patchPayload.note || "Labeled diff")}</span></div>` : `<div class="diff-scaffold"><div class="diff-file-list">${icon("cases")}<span>No changed files</span></div><div class="diff-empty">${icon("patch")}<span>The diff appears when Patchwright prepares an isolated change.</span></div></div><div class="stage-footer"><span>No pull request recorded</span></div>`, patchRow ? (patchPayload.synthetic ? "Synthetic example" : "Recorded change") : "Not prepared");
   const validation = responseStage("03", "Validation", "A missing tool does not approve.", `<div class="validation-checks">${(validationPayload.results || [["Functional tests", "Project install and tests"], ["Syft", "Updated inventory"], ["Trivy", "Dependency scan"], ["OSV-Scanner", "Advisory cross-check"]].map(([name, detail]) => ({ tool: name, reason: detail, status: "not_executed" }))).map((row) => `<div><span class="validation-icon">${icon("check")}</span><div><strong>${escapeHTML(row.tool || row[0] || "tool")}</strong><small>${escapeHTML(row.reason || row[1] || "")}</small></div>${badge(row.status === "not_executed" ? "Not executed" : String(row.status || "Pending"))}</div>`).join("")}</div>`, validationPayload.overall || "Pending");
-  const approval = responseStage("04", "Review and approval", "A human decision on a specific artifact.", `<div class="approval-summary"><p>${approvalRow ? `${escapeHTML(approvalRow.decision)} · ${escapeHTML(approvalRow.artifact_kind || "plan")}. ${escapeHTML(approvalRow.justification || "")}` : "Approve the labeled plan. If the diff changes, the prior approval is void. Merge remains prohibited."}</p><div class="actions">${button("Close case", "close-case", "", false, !item)}${button("Approve plan", "approve-plan", "approval", true, !planRow)}${button("Attempt merge", "forbid-merge", "lock", false, !item)}</div></div>`, approvalRow ? String(approvalRow.decision) : "Pending");
-  const runPanel = `<section class="case-block"><div class="case-block-heading"><h3>${icon("layers")}Investigation run</h3>${latestRun ? badge(latestRun.status) : badge("No run", "sand")}</div><div class="case-block-body"><p>${latestRun ? `Stage ${escapeHTML(String(latestRun.stage))} · attempts ${escapeHTML(String(latestRun.attempts))}/${escapeHTML(String(latestRun.max_attempts))}` : "Inventory → sources → correlation. One stage per advance. Critique does not change exposure."}</p><div class="case-actions">${button("Refresh inventory", "refresh-inventory", "refresh", false, !item)}${button("Start run", "start-run", "plus", true, !item)}${button("Advance stage", "advance-run", "arrow", false, !latestRun)}${button("Pause", "pause-run", "clock", false, !latestRun)}${button("Cancel", "cancel-run", "", false, !latestRun)}${button("Compose plan", "compose-plan", "patch", false, !assessments.length)}${button("Prepare diff", "prepare-patch", "patch", false, !assessments.length)}${button("Validate", "validate-patch", "check", false, !assessments.length)}${button("Approve plan", "approve-plan", "approval", false, !assessments.length)}${button("Synthesis", "synthesis", "signal", false, !assessments.length)}${button("Export report", "export-report", "download", false, !item)}${button("Close case", "close-case", "", false, !item)}</div>${runs.length ? `<ul class="timeline">${runs.slice(0, 4).map((run) => `<li>${escapeHTML(run.status)} · ${escapeHTML(String(run.stage))}<small>${escapeHTML(date(run.updated_at || run.started_at))}</small></li>`).join("")}</ul>` : ""}</div></section>`;
-  const memoryPanel = `<section class="case-block"><div class="case-block-heading"><h3>${icon("info")}H-MEM and critique</h3>${badge(memory?.available ? "Recall" : "No recall", memory?.available ? "green" : "sand")}</div><div class="case-block-body"><p>${escapeHTML((memory?.context || "The engine reinjects prior evidence when recall exists. It does not assign exposure.").slice(0, 400))}</p>${critique ? `<p><strong>Critique ${escapeHTML(critique.status)}</strong> ${escapeHTML((critique.evaluator || critique.reason || "").slice(0, 280))}</p>` : "<p class=\"inline-pending\">Planner/evaluator critique is skipped if Nightshift is not configured.</p>"}</div></section>`;
-  const history = `<section class="case-block history-block"><div class="case-block-heading"><h3>${icon("clock")}History and traceability</h3>${badge(runs.length ? "Runs" : "Partial query")}</div><div class="case-block-body">${item ? `<ul class="timeline"><li>Advisory recorded<small>${escapeHTML(date(item.created_at))} · persisted record</small></li>${latestRun ? `<li>Last run ${escapeHTML(latestRun.status)}<small>${escapeHTML(date(latestRun.updated_at))}</small></li>` : ""}</ul>` : '<p>Actions will appear here once an investigation exists.</p>'}${state.preview && item && state.preview.case_id === item.id ? `<details class="preview-details"><summary>Preview result</summary><p>The sample flow does not replace real runs.</p><pre class="code-panel">${escapeHTML(JSON.stringify(state.preview, null, 2))}</pre></details>` : ""}</div></section>`;
+  const approval = responseStage("04", "Review and approval", "A human decision on a specific artifact.", `<div class="approval-summary"><p>${approvalRow ? `${escapeHTML(approvalRow.decision)} · ${escapeHTML(approvalRow.artifact_kind || "plan")}. ${escapeHTML(approvalRow.justification || "")}` : "Review the plan and record your decision with a justification. Approval applies only to the selected artifact."}</p><div class="actions">${button("Close case", "close-case", "", false, !item)}${button("Approve plan", "approve-plan", "approval", true, !planRow)}</div></div>`, approvalRow ? String(approvalRow.decision) : "Pending");
+  const runPanel = `<section class="case-block"><div class="case-block-heading"><h3>${icon("layers")}Investigation run</h3>${latestRun ? badge(latestRun.status) : badge("No run", "sand")}</div><div class="case-block-body"><p>${latestRun ? `Stage ${escapeHTML(String(latestRun.stage))} · attempts ${escapeHTML(String(latestRun.attempts))}/${escapeHTML(String(latestRun.max_attempts))}` : "Inventory → sources → correlation. One stage per advance. Critique does not change exposure."}</p><div class="case-actions">${button("Refresh inventory", "refresh-inventory", "refresh", false, !item)}${button("Start run", "start-run", "plus", true, !item)}${button("Advance stage", "advance-run", "arrow", false, !latestRun)}${button("Pause", "pause-run", "clock", false, !latestRun)}${button("Cancel", "cancel-run", "", false, !latestRun)}${button("Compose plan", "compose-plan", "patch", false, !assessments.length)}${button("Synthesis", "synthesis", "signal", false, !assessments.length)}${button("Export report", "export-report", "download", false, !item)}${button("Close case", "close-case", "", false, !item)}</div>${runs.length ? `<ul class="timeline">${runs.slice(0, 4).map((run) => `<li>${escapeHTML(run.status)} · ${escapeHTML(String(run.stage))}<small>${escapeHTML(date(run.updated_at || run.started_at))}</small></li>`).join("")}</ul>` : ""}</div></section>`;
+  const memoryPanel = `<section class="case-block"><div class="case-block-heading"><h3>${icon("info")}H-MEM and critique</h3>${badge(memory?.available ? "Recall" : "No recall", memory?.available ? "green" : "sand")}</div><div class="case-block-body"><p>${escapeHTML((memory?.context || "The engine reinjects prior evidence when recall exists. It does not assign exposure.").slice(0, 400))}</p>${critique ? `<p><strong>Critique ${escapeHTML(critique.status)}</strong> ${escapeHTML((typeof critique.evaluator === "string" ? critique.evaluator : critique.evaluator?.reason || critique.reason || critique.decision || "Review recorded").slice(0, 280))}</p>` : "<p class=\"inline-pending\">Planner/evaluator critique is skipped if Nightshift is not configured.</p>"}</div></section>`;
+  const history = `<section class="case-block history-block"><div class="case-block-heading"><h3>${icon("clock")}History and traceability</h3>${badge(runs.length ? "Runs" : "Partial query")}</div><div class="case-block-body">${item ? `<ul class="timeline"><li>Advisory recorded<small>${escapeHTML(date(item.created_at))} · persisted record</small></li>${latestRun ? `<li>Last run ${escapeHTML(latestRun.status)}<small>${escapeHTML(date(latestRun.updated_at))}</small></li>` : ""}</ul>` : '<p>Actions will appear here once an investigation exists.</p>'}</div></section>`;
   const actions = item ? `<div class="page-actions">${button("Refresh", "refresh", "refresh")}${button("New investigation", "new-case", "plus", true)}</div>` : button("New investigation", "new-case", "plus", true);
   const crewLog = `<section class="case-block history-block"><div class="case-block-heading"><h3>${icon("layers")}Agent acts</h3>${badge((ctx?.agents || []).length ? String(ctx.agents.length) : "0")}</div><div class="case-block-body">${agentTimeline(ctx?.agents || [])}</div></section>`;
-  return heading("Crew investigation", "Every act has an owner, tool, and decision. Merge remains prohibited.", actions) + operationViews() + `<div class="operations-layout">${queue}<article class="case-workspace"><div class="case-workspace-heading"><div><span class="case-eyebrow">SELECTED INVESTIGATION</span><h2>${escapeHTML(item?.title || "Choose an investigation to begin")}</h2></div>${item ? `<button type="button" class="button small" data-action="preview" data-id="${escapeHTML(item.id)}">${icon("signal")}Preview</button>` : badge("Not selected")}</div>${context}<div class="case-intelligence-grid">${evidence}${exposure}</div><div class="case-intelligence-grid">${runPanel}${memoryPanel}</div>${crewLog}<div class="response-flow-heading"><h2>Response flow</h2><span>No PR is published in the MVP</span></div><div class="response-flow">${plan}${patch}${validation}${approval}</div>${history}</article></div>`;
+  return heading("Crew investigation", "Every act has an owner, tool, and decision. Merge remains prohibited.", actions) + operationViews() + `<div class="operations-layout">${queue}<article class="case-workspace"><div class="case-workspace-heading"><div><span class="case-eyebrow">SELECTED INVESTIGATION</span><h2>${escapeHTML(item?.title || "Choose an investigation to begin")}</h2></div>${item ? "" : badge("Not selected")}</div>${state.contextError ? note("Investigation details unavailable", state.contextError) : ""}${sampleNotice}${context}<div class="case-intelligence-grid">${evidence}${exposure}</div><div class="case-intelligence-grid">${runPanel}${memoryPanel}</div>${crewLog}<div class="response-flow-heading"><h2>Response flow</h2><span>No pull request recorded</span></div><div class="response-flow">${plan}${patch}${validation}${approval}</div>${history}</article></div>`;
 }
 function agentsPage() {
   const crew = state.crew || [];
   const roster = crew.length ? `<div class="integration-grid">${crew.map((agent) => `<article class="integration-card"><div class="integration-card-header"><span class="integration-symbol">${escapeHTML(agent.id.slice(0, 2).toUpperCase())}</span><div><h3>${escapeHTML(agent.name)}</h3><small>${escapeHTML(agent.role)}</small></div></div><p>${escapeHTML(agent.mission)}</p><p><strong>Decides:</strong> ${escapeHTML(agent.decides)}</p><p><strong>Never:</strong> ${escapeHTML(agent.never)}</p><div class="integration-card-footer">${(agent.tools || []).map((tool) => badge(tool)).join(" ")}</div></article>`).join("")}</div>` : empty("Loading crew", "The public roster does not require a token. Retry if the API is still starting.", "layers", button("Refresh", "refresh", "refresh"));
-  return heading("Crew", "Logical responsibilities, not eight processes. The SRS allows shared services if permissions and traces are preserved.", button("Run agent demo", "demo-run", "signal", true)) +
-    note("Mocks are labeled.", "The demo does not contact Nightshift, Zetaris, or NVIDIA. H-MEM and npm correlation are real.") +
+  return heading("Crew", "Specialist responsibilities and recorded investigation activity.") + operationViews() +
     roster +
     panel("Live activity", agentTimeline(state.activity || []), badge(state.activity?.length ? String(state.activity.length) : "0"), "Each act has agent, stage, decision, and timestamp. The log is append-only.");
 }
@@ -164,12 +161,12 @@ function flowPanel() {
   const steps = [["Detection", "Sources and advisories", "signal"], ["Investigation", "Evidence and exposure", "search"], ["Remediation", "Plan and proposed change", "patch"], ["Validation", "Tests and analysis", "check"], ["Human review", "Decision and PR handoff", "approval"]];
   return panel("Response flow", `<ol class="flow-list">${steps.map(([name, sub, glyph]) => `<li><span class="flow-step">${icon(glyph)}</span><div><strong>${name}</strong><small>${sub}</small></div></li>`).join("")}</ol><div class="aside-note">${icon("lock")}Warden orchestrates. The Arbiter classifies. Nightshift, when present, only proposes. Merge is prohibited.</div>`, badge("Agents"));
 }
-function listToolbar(kind) { return `<div class="toolbar"><label class="search-field" for="list-search">${icon("search")}<input id="list-search" type="search" placeholder="${kind === "applications" ? "Search application or repository" : "Search by investigation title"}" value="${escapeHTML(state.search)}" aria-label="Buscar ${kind === "applications" ? "aplicaciones" : "investigaciones"}"></label><div class="filters"><span class="badge">${kind === "applications" ? "Node.js / npm" : "All advisories"}</span></div></div>`; }
+function listToolbar(kind) { return `<div class="toolbar"><label class="search-field" for="list-search">${icon("search")}<input id="list-search" type="search" placeholder="${kind === "applications" ? "Search application or repository" : "Search by investigation title"}" value="${escapeHTML(state.search)}" aria-label="Search ${kind === "applications" ? "applications" : "investigations"}"></label><div class="filters"><span class="badge">${kind === "applications" ? "Node.js / npm" : "All advisories"}</span></div></div>`; }
 function applicationsPage(id, tab) {
   if (id) return applicationDetail(id, tab);
   const rows = state.applications?.filter((item) => `${item.name} ${item.repository}`.toLowerCase().includes(state.search.toLowerCase()));
   return heading("Applications", "Technology context that links each threat to your environment.", button("Register application", "new-app", "plus", true)) +
-    panel("Workspace repositories", listToolbar("applications") + (rows?.length ? table(["Application", "Ecosystem", "Inventory", ""], rows.map((item) => `<tr><td><button class="row-link" data-action="app-detail" data-id="${escapeHTML(item.id)}">${escapeHTML(item.name)}</button><small>${escapeHTML(item.repository)}</small></td><td>${badge("npm")}</td><td>${badge("Pending")}</td><td class="row-arrow">↗</td></tr>`).join("")) : state.search && state.applications?.length ? empty("No matches", "Try another name or repository.", "search") : accessEmpty("applications"))) +
+    panel("Workspace repositories", listToolbar("applications") + (rows?.length ? table(["Application", "Ecosystem", "Inventory", ""], rows.map((item) => `<tr><td><button class="row-link" data-action="app-detail" data-id="${escapeHTML(item.id)}">${escapeHTML(item.name)}</button>${item.repository?.startsWith("demo-org/") ? badge("Synthetic sample", "sand") : ""}<small>${escapeHTML(item.repository)}</small></td><td>${badge("npm")}</td><td><a href="#applications/${escapeHTML(item.id)}/inventory">View inventory</a></td><td class="row-arrow">↗</td></tr>`).join("")) : state.search && state.applications?.length ? empty("No matches", "Try another name or repository.", "search") : accessEmpty("applications"))) +
     `<div class="feature-columns"><div class="feature-description"><h3>Versioned inventory</h3><p>Direct and transitive dependencies tied to a verifiable commit.</p></div><div class="feature-description"><h3>Deployment context</h3><p>Environments and history to investigate past exposure.</p></div><div class="feature-description"><h3>Explicit coverage</h3><p>Partial or stale inventories will be shown as such.</p></div></div>`;
 }
 function tabs(items, selected, prefix) { return `<nav class="tabs" aria-label="Detail sections">${items.map(([key, label]) => `<a class="tab" href="#${prefix}/${key}"${selected === key ? ' aria-current="page"' : ""}>${label}</a>`).join("")}</nav>`; }
@@ -178,37 +175,38 @@ function applicationDetail(id, tab) {
   if (!app) return heading("Application detail", "Select a registered application to view its context.") + panel("Application unavailable", accessEmpty("applications"));
   const selected = ["overview", "inventory", "deployments"].includes(tab) ? tab : "overview";
   let body = "";
-  if (selected === "overview") body = panel("Application information", `<div class="section-body"><dl class="properties"><dt>Name</dt><dd>${escapeHTML(app.name)}</dd><dt>Repository</dt><dd>${escapeHTML(app.repository)}</dd><dt>Ecosystem</dt><dd>Node.js / npm</dd><dt>Registered</dt><dd>${escapeHTML(date(app.created_at))}</dd><dt>Inventory</dt><dd>${badge(state.snapshots.length ? `${state.snapshots.length} snapshot${state.snapshots.length === 1 ? "" : "s"}` : "Not generated", state.snapshots.length ? "green" : "sand")}</dd><dt>Deployments</dt><dd>No imported data</dd></dl></div>`);
+  if (selected === "overview") body = panel("Application information", `<div class="section-body"><dl class="properties"><dt>Name</dt><dd>${escapeHTML(app.name)}</dd><dt>Repository</dt><dd>${escapeHTML(app.repository)}</dd><dt>Ecosystem</dt><dd>Node.js / npm</dd><dt>Registered</dt><dd>${escapeHTML(date(app.created_at))}</dd><dt>Inventory</dt><dd>${badge(state.snapshots.length ? `${state.snapshots.length} snapshot${state.snapshots.length === 1 ? "" : "s"}` : "Not generated", state.snapshots.length ? "green" : "sand")}</dd><dt>Deployments</dt><dd>${state.inventoryError ? "Unavailable" : `${state.deployments.length} imported`}</dd></dl></div>`);
   if (selected === "inventory") {
     const snapshots = state.snapshots || [];
     body = snapshots.length
       ? panel("Components and dependencies", table(["Commit", "Observed", "Warnings"], snapshots.map((row) => `<tr><td><code>${escapeHTML((row.commit_ref || row.commit_sha || "").slice(0, 12))}</code></td><td>${escapeHTML(date(row.observed_at))}</td><td>${badge(Array.isArray(row.warnings) && row.warnings.length ? String(row.warnings.length) : "None")}</td></tr>`).join("")), button("Refresh inventory", "refresh-inventory", "refresh"), "Snapshot resolves via GitHub. Real Syft is still pending.")
       : panel("Components and dependencies", empty("Inventory not built yet", "Resolve the commit lockfile to correlate versions.", "layers", button("Generate inventory", "refresh-inventory", "refresh"), true), badge("Pending"), "Real Syft is still pending; this snapshot does not assert a container SBOM.");
   }
-  if (selected === "deployments") body = panel("Deployment history", empty("No deployments imported", "Each record will identify environment, artifact, period, and source to assess historical exposure.", "clock", button("Import deployments", "none", "download", false, true, "Historical import is pending."), true), badge("Pending"));
+  if (selected === "deployments") body = panel("Deployment history", state.inventoryError ? note("Unable to load deployments", state.inventoryError) : state.deployments.length ? table(["Environment", "Commit", "Deployed", "Retired"], state.deployments.map((row) => `<tr><td>${escapeHTML(row.environment)}</td><td><code>${escapeHTML((row.commit_sha || row.commit_ref || row.artifact_ref || "Unknown").slice(0, 16))}</code></td><td>${escapeHTML(date(row.deployed_at))}</td><td>${row.retired_at ? escapeHTML(date(row.retired_at)) : "Not recorded"}</td></tr>`).join("")) : empty("No deployment records", "Exposure history requires deployment records with a period and source. No deployment has been inferred from repository contents.", "clock"));
+  if (selected !== "deployments" && state.inventoryError) body = note("Inventory unavailable", state.inventoryError) + body;
   return `<a class="back-link" href="#applications">${icon("back")}All applications</a>` + heading(app.name, app.repository, button("Generate inventory", "refresh-inventory", "refresh")) + tabs([["overview", "General"], ["inventory", "Inventory"], ["deployments", "Deployments"]], selected, `applications/${escapeHTML(id)}`) + body;
 }
 function integrationsPage() {
   const rows = CATALOG.filter((item) => state.filter === "all" || (state.filter === "sources" ? item.kind === "source" : state.filter === "tools" ? ["scanner", "inventory"].includes(item.kind) : ["model", "model-access", "research", "data", "engineering", "engine"].includes(item.kind)));
   const scopes = { mvp: "MVP", hackathon: "Hackathon required", candidate: "Candidate", conditional: "Conditional" };
-  return heading("Integrations", "Sources, tools, and models that will inform each investigation.", button("Refresh status", "refresh", "refresh")) +
+  return heading("Integrations", "Sources, tools, and models available to investigations.", button("Refresh status", "refresh", "refresh")) +
     note("Configuration is not verification.", "A credential or URL only marks configuration. Nightshift, Zetaris, and H-MEM are verified by the named operation, not by secret presence.") +
     `<div class="tabs" aria-label="Filter integrations">${[["all", "All"], ["sources", "Intelligence"], ["tools", "Analysis"], ["models", "Models and services"]].map(([key, label]) => `<button class="tab${state.filter === key ? " active" : ""}" type="button" data-action="integration-filter" data-filter="${key}" aria-pressed="${state.filter === key}">${label}</button>`).join("")}</div><div class="integration-grid">${rows.map((item) => {
       const live = state.integrations?.find((entry) => entry.id === item.id);
       const verified = live?.verified === true;
       const status = live?.status || item.status;
-      return `<article class="integration-card"><div class="integration-card-header"><span class="integration-symbol">${item.mark}</span><div><h3>${item.name}</h3><small>${scopes[item.scope] || item.scope}</small></div></div><p>${item.description}</p><div class="integration-card-footer">${badge(verified ? "Verified" : status === "implemented_unverified" ? "Connected, unverified" : "Pending", verified ? "green" : "sand")}<span class="muted">${live?.verified_operation ? escapeHTML(live.verified_operation) : live?.auth?.configured ? "Configured" : live?.auth?.mode === "none" ? "No credential" : "Unverified"}</span></div>${["meterless", "zetaris", "hmem"].includes(item.id) ? `<div class="case-actions"><button type="button" class="button" data-action="check-integration" data-id="${escapeHTML(item.id)}">${icon("check")}Check</button></div>` : ""}</article>`;
+      return `<article class="integration-card"><div class="integration-card-header"><span class="integration-symbol">${item.mark}</span><div><h3>${item.name}</h3><small>${scopes[item.scope] || item.scope}</small></div></div><p>${item.description}</p><div class="integration-card-footer">${badge(verified ? "Verified" : status === "implemented_unverified" ? "Connected, unverified" : status === "not_implemented" ? "Unavailable" : "Unverified", verified ? "green" : "sand")}<span class="muted">${live?.verified_operation ? escapeHTML(live.verified_operation) : live?.auth?.configured ? "Configured" : live?.auth?.mode === "none" ? "No credential" : "Unverified"}</span></div>${["meterless", "zetaris", "hmem"].includes(item.id) ? `<div class="case-actions"><button type="button" class="button" data-action="check-integration" data-id="${escapeHTML(item.id)}">${icon("check")}Check</button></div>` : ""}</article>`;
     }).join("")}</div>`;
 }
 function settingRow(name, description, value) { return `<div class="settings-row"><div><h3>${escapeHTML(name)}</h3><p>${escapeHTML(description)}</p></div><div class="setting-value">${value}</div></div>`; }
 function settingsPage() {
   const values = {
-    general: [settingRow("Espacio de trabajo", "One organization for the first product version.", "Local environment"), settingRow("Ecosystem inicial", "Applications y dependencias admitidas en el MVP.", "Node.js / npm"), settingRow("Connection", "Development token stored in memory only.", button(state.authenticated ? "Manage" : "Connect", "connect", "plug"))],
-    access: [settingRow("Development session", "Local access via a shared token.", state.authenticated ? badge("Active", "green") : badge("Not connected")), settingRow("Users and roles", "Administrator, analyst, developer, approver, and auditor.", badge("Pending")), settingRow("Project permissions", "Data and action authorization by assigned scope.", badge("Pending"))],
-    policy: [settingRow("Human oversight", "Sensitive proposals will require specific authorization.", "Defined in the SRS"), settingRow("Execution budgets", "Time, attempt, and model request limits.", badge("To be implemented")), settingRow("Production actions", "Merge, deploy, and real secrets are outside the MVP.", "Excluded")],
-    data: [settingRow("Database", "Persistence for applications and investigations.", state.database ? badge("Available", "green") : badge("Not connected", "sand")), settingRow("Retention", "Data and artifact retention and deletion policy.", badge("To be defined")), settingRow("Backup and restore", "Operational procedures and recovery evidence.", badge("Pending"))],
+    general: [settingRow("Workspace", "One organization for the first product version.", "Local environment"), settingRow("Supported ecosystem", "Supported application dependencies.", "Node.js / npm"), settingRow("Connection", "Individual credential stored in browser memory only.", button(state.authenticated ? "Manage" : "Connect", "connect", "plug"))],
+    access: [settingRow("Current session", "Individual credentials; permissions are enforced by the server.", state.authenticated ? badge("Active", "green") : badge("Not connected")), settingRow("Authorization", "Server-assigned roles and application scope govern every request.", "Server enforced")],
+    policy: [settingRow("Human oversight", "Sensitive proposals will require specific authorization.", "Artifact-specific review"), settingRow("Execution budgets", "Runs retain time and attempt budgets across restarts.", "Per run"), settingRow("Production actions", "Merge, deploy, and real secrets are outside the MVP.", "Excluded")],
+    data: [settingRow("Database", "Persistence for applications and investigations.", state.database ? badge("Available", "green") : badge("Not connected", "sand")), settingRow("Operations", "Retention and backups are managed by the operator; this screen does not change them.", "Read only")],
   };
-  return heading("Settings", "Workspace preferences, access, and policies.") + `<div class="settings-layout"><nav class="settings-nav" aria-label="Settings categories">${[["general", "General"], ["access", "Access and roles"], ["policy", "Autonomy and limits"], ["data", "Data and retention"]].map(([key, label]) => `<button type="button" class="${state.settingsTab === key ? "active" : ""}" data-action="settings-tab" data-tab="${key}" aria-pressed="${state.settingsTab === key}">${label}</button>`).join("")}</nav>${panel("Settings del espacio", `<div class="section-body">${values[state.settingsTab].join("")}</div>`, badge("Development"))}</div>`;
+  return heading("Settings", "Workspace preferences, access, and policies.") + `<div class="settings-layout"><nav class="settings-nav" aria-label="Settings categories">${[["general", "General"], ["access", "Access and roles"], ["policy", "Autonomy and limits"], ["data", "Data and retention"]].map(([key, label]) => `<button type="button" class="${state.settingsTab === key ? "active" : ""}" data-action="settings-tab" data-tab="${key}" aria-pressed="${state.settingsTab === key}">${label}</button>`).join("")}</nav>${panel("Workspace settings", `<div class="section-body">${values[state.settingsTab].join("")}</div>`, badge("Read only"))}</div>`;
 }
 function render() {
   const current = route();
@@ -229,7 +227,7 @@ async function api(path, options = {}) {
   try { response = await fetch(path, { ...options, headers: { "Content-Type": "application/json", ...(state.token ? { Authorization: `Bearer ${state.token}` } : {}), ...(options.headers || {}) }, cache: "no-store", signal: AbortSignal.timeout(requestTimeout(path, method)) }); }
   catch (error) { throw new Error(error.name === "TimeoutError" ? "The request took too long. Check the connection again." : "Could not reach the local API."); }
   if (!response.ok) {
-    const messages = { 401: "The token is invalid. Check the environment connection.", 403: "The crew rejected that action. Merge, deploy, and secrets are prohibited.", 404: "The requested record is no longer available.", 409: "Complete the previous stage before continuing.", 422: "Check the fields. Use org/repo and a valid http or https URL.", 503: "The service is not ready. Check the database and migrations." };
+    const messages = { 401: "The token is invalid. Check the environment connection.", 403: "Your account is not authorized for this action.", 404: "The requested record is no longer available.", 409: "Complete the previous stage before continuing.", 422: "Check the fields. Use org/repo and a valid http or https URL.", 503: "The service is not ready. Check the database and migrations." };
     const error = new Error(messages[response.status] || `The request failed (${response.status}).`); error.status = response.status; throw error;
   }
   return response.json();
@@ -283,7 +281,7 @@ function openModal(title, content) { $("modal-content").innerHTML = `<div class=
 function field(id, label, input, hint = "") { return `<div class="field"><label for="${id}">${label}</label>${input}${hint ? `<p class="field-hint" id="${id}-hint">${hint}</p>` : ""}</div>`; }
 function formActions(text) { return `<p id="form-error" class="form-error" role="alert" hidden></p><div class="dialog-actions">${button("Cancel", "close-modal")}<button class="button primary" type="submit">${text}</button></div>`; }
 function connectionDialog() {
-  openModal("Connect your environment", `<p>Use the token configured for this local environment. It is kept in memory until you close or reload the page.</p><div class="connection-summary"><span>API</span>${badge(state.api ? "Available" : "Unavailable", state.api ? "green" : "sand")}</div><div class="connection-summary"><span>Database</span>${badge(state.database ? "Available" : "Pending", state.database ? "green" : "sand")}</div><hr><form id="connect-form" method="post" action="/api/integrations">${field("connection-token", "Development token (required)", '<div class="password-row"><input id="connection-token" name="token" type="password" required autocomplete="off" spellcheck="false" aria-describedby="connection-token-hint"><button class="button" type="button" data-action="toggle-token" aria-pressed="false">Show</button></div>', "Matches WARDEN_API_TOKEN in your local configuration.")}${formActions("Connect")}</form>${state.authenticated ? `<hr>${button("Disconnect this session", "logout")}` : ""}`);
+  openModal("Connect your environment", `<p>Use your individual access credential. It stays in memory until you close or reload this page.</p><div class="connection-summary"><span>API</span>${badge(state.api ? "Available" : "Unavailable", state.api ? "green" : "sand")}</div><div class="connection-summary"><span>Database</span>${badge(state.database ? "Available" : "Pending", state.database ? "green" : "sand")}</div><hr><form id="connect-form" method="post" action="/api/integrations">${field("connection-token", "Access credential (required)", '<div class="password-row"><input id="connection-token" name="token" type="password" required autocomplete="off" spellcheck="false" aria-describedby="connection-token-hint"><button class="button" type="button" data-action="toggle-token" aria-pressed="false">Show</button></div>', "Issued to your individual account. Your server-assigned roles and application scope apply.")}${formActions("Connect")}</form>${state.authenticated ? `<hr>${button("Disconnect this session", "logout")}` : ""}`);
 }
 function requireWritable() {
   if (!state.authenticated) { connectionDialog(); return false; }
@@ -292,7 +290,7 @@ function requireWritable() {
 }
 function newAppDialog() {
   if (!requireWritable()) return;
-  openModal("Register application", `<p>Add a repository to prepare your application security context.</p><form id="application-form" method="post" action="/api/applications">${field("application-name", "Name (required)", '<input id="application-name" name="name" required maxlength="120" autocomplete="off">')}${field("application-repository", "GitHub repository (required)", '<input id="application-repository" name="repository" required maxlength="201" placeholder="org/repository" autocapitalize="off" spellcheck="false" aria-describedby="application-repository-hint">', "For now only the reference is registered. Inventory is pending.")}${formActions("Register application")}</form>`);
+  openModal("Register application", `<p>Add a repository to prepare your application security context.</p><form id="application-form" method="post" action="/api/applications">${field("application-name", "Name (required)", '<input id="application-name" name="name" required maxlength="120" autocomplete="off">')}${field("application-repository", "GitHub repository (required)", '<input id="application-repository" name="repository" required maxlength="201" placeholder="org/repository" autocapitalize="off" spellcheck="false" aria-describedby="application-repository-hint">', "Register the repository, then generate a versioned inventory from its commit.")}${formActions("Register application")}</form>`);
 }
 function newCaseDialog() {
   if (!requireWritable()) return;
@@ -316,9 +314,12 @@ async function loadCaseExtras(item, sequence = refreshSequence) {
   ]);
   if (sequence !== refreshSequence) return;
   state.context = results[0].status === "fulfilled" ? results[0].value : null;
+  state.contextError = results[0].status === "rejected" ? results[0].reason.message : "";
   state.snapshots = results[1].status === "fulfilled" ? (results[1].value.snapshots || []) : [];
+  state.deployments = results[1].status === "fulfilled" ? (results[1].value.deployments || []) : [];
+  state.inventoryError = results[1].status === "rejected" ? results[1].reason.message : "";
 }
-function helpDialog() { openModal("Agents investigate. You decide.", `<p>Eleven logical roles collaborate in one orchestration. The Arbiter classifies with npm rules. Nightshift, if present, only proposes. The Guardian records the human decision and rejects merge.</p>${note("3-minute demo.", "Connect the environment and click Run agent demo. You will see inventory, evidence, exposure, plan, labeled diff, and the timeline.")}${note("Without attesting sponsors.", "The demo does not call Nightshift, Zetaris, or NVIDIA. H-MEM and correlation are real code.")}<div class="dialog-actions"><a class="button" href="/docs" target="_blank" rel="noopener">API documentation ↗</a>${button("Got it", "close-modal", "", true)}</div>`); }
+function helpDialog() { openModal("About Warden", `<p>Investigate advisories, assess exposure, and review proposed responses in one case. Models propose; evidence and deterministic checks support conclusions.</p>${note("Sample mode", "Creates a labeled synthetic application and investigation in this workspace. It does not contact Nightshift, Zetaris, or NVIDIA, and does not prove those integrations.")}<div class="dialog-actions">${button("Create sample investigation", "sample-run", "signal")}${button("Close", "close-modal", "", true)}</div>`); }
 
 async function performAction(action, target) {
   if (NAV.some((item) => item[0] === action)) { navigate(action); return; }
@@ -371,13 +372,14 @@ async function performAction(action, target) {
     announce(`${target.dataset.id}: ${result.status}${result.verified ? " (verified)" : ""}.`, result.verified ? "success" : "");
     await refreshData(true);
   }
-  if (action === "demo-run") {
+  if (action === "sample-run") {
+    $("modal").close();
     if (!requireWritable()) return;
     announce("The crew is working with synthetic sources…");
     const result = await api("/api/demo/run", { method: "POST" });
     state.selectedCase = result.investigation_id;
     state.operationView = "case";
-    announce("Demo complete. Agents acted; Nightshift was not contacted.", "success");
+    announce("Sample investigation created. Synthetic sources; sponsors were not contacted.", "success");
     await refreshData(true);
     state.selectedCase = result.investigation_id;
     state.operationView = "case";
@@ -395,32 +397,29 @@ async function performAction(action, target) {
   if (action === "close-case") {
     const item = selectedInvestigation();
     if (!item || !requireWritable()) return;
-    openModal("Close investigation", `<p>Closing keeps evidence and does not merge code. Choose the outcome and justify the decision.</p><form id="close-form">${field("close-outcome", "Outcome", '<select id="close-outcome" name="outcome" required><option value="discarded">Discarded</option><option value="not_affected">Not affected</option><option value="risk_accepted">Risk accepted</option><option value="cancelled">Cancelled</option></select>')}${field("close-justification", "Justification (at least 10 characters)", '<textarea id="close-justification" name="justification" required minlength="10" maxlength="2000" rows="3">Closed from the operations center. Merge remains prohibited.</textarea>')}${formActions("Close case")}</form>`);
+    openModal("Close investigation", `<p>Closing keeps evidence and does not merge code. Choose the outcome and justify the decision.</p><form id="close-form">${field("close-outcome", "Outcome", '<select id="close-outcome" name="outcome" required><option value="discarded">Discarded</option><option value="not_affected">Not affected</option><option value="risk_accepted">Risk accepted</option><option value="cancelled">Cancelled</option></select>')}${field("close-justification", "Justification (at least 10 characters)", '<textarea id="close-justification" name="justification" required minlength="10" maxlength="2000" rows="3" placeholder="Explain why this outcome is appropriate"></textarea>')}${formActions("Close case")}</form>`);
   }
-  if (action === "forbid-merge") {
+  if (action === "approve-plan") {
     const item = selectedInvestigation();
     if (!item || !requireWritable()) return;
-    try {
-      await api(`/api/investigations/${item.id}/merge`, { method: "POST" });
-    } catch (error) {
-      announce(error.message, "error");
-      await refreshData(true);
-    }
+    openModal("Review response plan", `<p>Record your decision on the current plan. This does not approve a different commit, publish a pull request, or authorize deployment.</p><form id="approval-form">${field("approval-decision", "Decision", '<select id="approval-decision" name="decision" required><option value="">Select a decision</option><option value="approved">Approve</option><option value="rejected">Reject</option></select>')}${field("approval-justification", "Justification (at least 10 characters)", '<textarea id="approval-justification" name="justification" required minlength="10" maxlength="2000" rows="3"></textarea>')}${formActions("Record decision")}</form>`);
+    return;
   }
-  if (action === "compose-plan" || action === "prepare-patch" || action === "validate-patch" || action === "approve-plan" || action === "export-report") {
+  if (action === "compose-plan" || action === "export-report") {
     const item = selectedInvestigation();
     if (!item || !requireWritable()) return;
     const routes = {
       "compose-plan": ["/api/investigations/" + item.id + "/plan", { method: "POST" }],
-      "prepare-patch": ["/api/investigations/" + item.id + "/patch", { method: "POST" }],
-      "validate-patch": ["/api/investigations/" + item.id + "/validate", { method: "POST" }],
-      "approve-plan": ["/api/investigations/" + item.id + "/approval", { method: "POST", body: JSON.stringify({ artifact_kind: "plan", decision: "approved", justification: "Demo review of the labeled plan artifact." }) }],
       "export-report": ["/api/investigations/" + item.id + "/report", { method: "GET" }],
     };
     const [path, options] = routes[action];
     const result = await api(path, options);
     if (action === "export-report") {
-      openModal("Exportable report", `<pre class="code-panel">${escapeHTML(JSON.stringify(result, null, 2).slice(0, 8000))}</pre><div class="dialog-actions">${button("Close", "close-modal", "", true)}</div>`);
+      const file = new Blob([JSON.stringify(result, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(file);
+      const link = document.createElement("a"); link.href = url; link.download = `warden-investigation-${item.id}.json`;
+      document.body.append(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+      announce("Investigation report downloaded.", "success");
     } else {
       announce(action === "approve-plan" ? "Human approval recorded. Merge remains prohibited." : "The crew recorded the next act.", "success");
       await refreshData(true);
@@ -430,13 +429,14 @@ async function performAction(action, target) {
     try {
       const inventory = await api(`/api/applications/${target.dataset.id}/inventory`);
       state.snapshots = inventory.snapshots || [];
-    } catch { state.snapshots = []; }
+      state.deployments = inventory.deployments || []; state.inventoryError = "";
+    } catch (error) { state.snapshots = []; state.deployments = []; state.inventoryError = error.message; }
     navigate(`applications/${target.dataset.id}`);
   }
   if (action === "settings-tab") { state.settingsTab = target.dataset.tab; render(); }
   if (action === "integration-filter") { state.filter = target.dataset.filter; render(); }
   if (action === "operation-view") { state.operationView = target.dataset.view; navigate("overview"); }
-  if (action === "logout") { ++refreshSequence; state.token = ""; state.authenticated = false; state.applications = null; state.investigations = null; state.integrations = null; state.preview = null; state.appError = ""; state.caseError = ""; state.loading = false; $("modal").close(); render(); announce("Local session disconnected."); }
+  if (action === "logout") { ++refreshSequence; state.token = ""; state.authenticated = false; state.applications = null; state.investigations = null; state.integrations = null; state.context = null; state.snapshots = []; state.deployments = []; state.appError = ""; state.caseError = ""; state.loading = false; $("modal").close(); render(); announce("Local session disconnected."); }
   if (action === "toggle-token") { const input = $("connection-token"); const visible = input.type === "password"; input.type = visible ? "text" : "password"; target.textContent = visible ? "Hide" : "Show"; target.setAttribute("aria-pressed", String(visible)); }
   if (action === "nav-toggle") {
     if (document.body.classList.contains("nav-open")) closeNavigation();
@@ -447,16 +447,17 @@ async function performAction(action, target) {
       $("sidebar").querySelector("a").focus();
     }
   }
-  if (action === "preview") {
-    target.disabled = true; target.setAttribute("aria-busy", "true");
-    try { state.preview = await api(`/api/investigations/${target.dataset.id}/preview`, { method: "POST" }); state.selectedCase = target.dataset.id; state.operationView = "case"; navigate("overview"); announce("The flow stopped at pending inventory. No changes were executed."); }
-    catch (error) { announce(error.message, "error"); }
-    finally { target.disabled = false; target.setAttribute("aria-busy", "false"); }
-  }
+
 }
 document.addEventListener("click", (event) => {
   const target = event.target.closest("[data-action]");
-  if (target && !target.disabled) performAction(target.dataset.action, target).catch((error) => announce(error.message, "error"));
+  if (target && !target.disabled) {
+    const mutation = ["sample-run", "refresh-inventory", "start-run", "advance-run", "pause-run", "cancel-run", "compose-plan", "synthesis", "check-integration"].includes(target.dataset.action);
+    if (mutation) { target.disabled = true; target.setAttribute("aria-busy", "true"); }
+    performAction(target.dataset.action, target).catch((error) => announce(error.message, "error")).finally(() => {
+      if (mutation) { target.disabled = false; target.removeAttribute("aria-busy"); }
+    });
+  }
   if (event.target.closest(".nav-item")) closeNavigation();
 });
 document.addEventListener("input", (event) => {
@@ -469,7 +470,7 @@ document.addEventListener("input", (event) => {
 document.addEventListener("invalid", (event) => { event.target.setAttribute("aria-invalid", "true"); }, true);
 document.addEventListener("submit", async (event) => {
   const form = event.target;
-  if (!["connect-form", "application-form", "investigation-form", "close-form"].includes(form.id)) return;
+  if (!["connect-form", "application-form", "investigation-form", "close-form", "approval-form"].includes(form.id)) return;
   event.preventDefault();
   const payload = Object.fromEntries(new FormData(form));
   const submit = form.querySelector("button[type=submit]");
@@ -480,6 +481,12 @@ document.addEventListener("submit", async (event) => {
     if (form.id === "connect-form") {
       state.token = payload.token; submit.textContent = "Connecting…";
       await refreshData(true); $("modal").close(); announce(state.database ? "Environment connected." : "API connected. The database is not ready yet.", state.database ? "success" : "");
+    } else if (form.id === "approval-form") {
+      const item = selectedInvestigation();
+      if (!item) throw new Error("Select an investigation.");
+      await api(`/api/investigations/${item.id}/approval`, { method: "POST", body: JSON.stringify({ ...payload, artifact_kind: "plan" }) });
+      $("modal").close(); await refreshData(true);
+      announce("Your plan decision was recorded.", "success");
     } else if (form.id === "close-form") {
       const item = selectedInvestigation();
       if (!item) throw new Error("Select an investigation.");
@@ -506,8 +513,9 @@ window.addEventListener("hashchange", () => {
   if (current.page === "applications" && current.id && state.token) {
     api(`/api/applications/${current.id}/inventory`).then((inventory) => {
       state.snapshots = inventory.snapshots || [];
+      state.deployments = inventory.deployments || []; state.inventoryError = "";
       render();
-    }).catch(() => { render(); });
+    }).catch((error) => { state.snapshots = []; state.deployments = []; state.inventoryError = error.message; render(); });
   }
   render();
   $("main-content").focus({ preventScroll: true });

@@ -155,20 +155,39 @@ function activityCard(group) {
   const agent = state.crew.find((entry) => entry.id === event.agent);
   const [label, tone] = AGENT_EVENT_STATUS[event.status] || [event.status || "Recorded", "neutral"];
   const stage = AGENT_STAGE_LABELS[event.stage] || event.stage || "Investigation";
-  const started = group.events.find((entry) => entry.status === "started");
+  const latestTask = group.tasks?.[0] || group;
+  const started = latestTask.events.find((entry) => entry.status === "started");
   const elapsed = started && event.status !== "started" ? Date.parse(event.created_at) - Date.parse(started.created_at) : NaN;
   const duration = Number.isFinite(elapsed) && elapsed >= 0 ? `${(elapsed / 1000).toFixed(1)}s elapsed` : "";
-  const synthetic = group.events.some((entry) => entry.synthetic || entry.detail?.synthetic);
+  const synthetic = latestTask.events.some((entry) => entry.synthetic || entry.detail?.synthetic);
   const investigation = state.investigations?.find((entry) => entry.id === event.investigation_id);
   const caseLink = investigation ? `<button class="text-link activity-case" type="button" data-action="case-detail" data-id="${escapeHTML(investigation.id)}">${escapeHTML(investigation.title)} ${icon("arrow")}</button>` : "";
-  const steps = group.events.map((entry) => `<li><span class="activity-step-status">${escapeHTML(AGENT_EVENT_STATUS[entry.status]?.[0] || entry.status)}</span>${activityTime(entry.created_at)}<p>${escapeHTML(entry.summary || "No summary recorded.")}</p></li>`).join("");
-  return `<li class="activity-item"><article class="activity-card activity-${tone}"><header class="activity-card-header">${agentAvatar(event.agent, true)}<div class="activity-identity"><strong>${escapeHTML(agent?.name || event.agent || "Agent")}</strong><span>${escapeHTML(stage)}</span></div>${activityTime(event.created_at)}</header><div class="activity-content"><div class="activity-state"><span class="activity-status activity-status-${tone}">${icon(tone === "error" || tone === "attention" ? "info" : tone === "running" ? "clock" : "check")}${escapeHTML(label)}</span>${synthetic ? badge("Synthetic sample", "sand") : ""}${duration ? `<span class="activity-duration">${duration}</span>` : ""}</div><p class="activity-summary">${escapeHTML(event.summary || "No summary recorded.")}</p>${caseLink}${group.events.length > 1 ? `<details class="activity-details"><summary>${group.events.length} recorded events</summary><ol>${steps}</ol></details>` : ""}</div></article></li>`;
+  const taskHistory = (group.tasks || [group]).map((task) => {
+    const taskCase = state.investigations?.find((entry) => entry.id === task.latest.investigation_id);
+    const context = taskCase?.title || (task.latest.run_id ? `Run ${String(task.latest.run_id).slice(0, 8)}` : "Recorded activity");
+    const steps = task.events.map((entry) => `<li><span class="activity-step-status">${escapeHTML(AGENT_EVENT_STATUS[entry.status]?.[0] || entry.status)}</span>${activityTime(entry.created_at)}<p>${escapeHTML(entry.summary || "No summary recorded.")}</p></li>`).join("");
+    return `<section class="activity-task"><h4>${escapeHTML(AGENT_STAGE_LABELS[task.latest.stage] || task.latest.stage || "Investigation")}</h4><span class="activity-task-context">${escapeHTML(context)}</span><ol>${steps}</ol></section>`;
+  }).join("");
+  const taskCount = group.tasks?.length || 1;
+
+  return `<li class="activity-item"><article class="activity-card activity-${tone}"><header class="activity-card-header">${agentAvatar(event.agent, true)}<div class="activity-identity"><strong>${escapeHTML(agent?.name || event.agent || "Agent")}</strong><span>${escapeHTML(stage)}</span></div>${activityTime(event.created_at)}</header><div class="activity-content"><div class="activity-state"><span class="activity-status activity-status-${tone}">${icon(tone === "error" || tone === "attention" ? "info" : tone === "running" ? "clock" : "check")}${escapeHTML(label)}</span>${synthetic ? badge("Synthetic sample", "sand") : ""}${duration ? `<span class="activity-duration">${duration}</span>` : ""}</div><p class="activity-summary">${escapeHTML(event.summary || "No summary recorded.")}</p>${caseLink}${group.events.length > 1 ? `<details class="activity-details"><summary>${taskCount} ${taskCount === 1 ? "task" : "tasks"} · ${group.events.length} recorded events</summary>${taskHistory}</details>` : ""}</div></article></li>`;
+}
+function groupActivityByAgent(events) {
+  const agents = new Map();
+  for (const task of groupAgentActivity(events)) {
+    const id = task.latest.agent || "unknown";
+    if (!agents.has(id)) agents.set(id, { first: task.first, latest: task.latest, events: [], tasks: [] });
+    const agent = agents.get(id);
+    agent.tasks.push(task);
+    agent.events.push(...task.events);
+  }
+  return [...agents.values()];
 }
 function agentTimeline(events) {
   if (!events?.length) return empty("No agent activity yet", "Start an investigation to see evidence collection, decisions, and handoffs here.", "layers", state.authenticated ? "" : button("Connect environment", "connect", "plug", true));
-  const groups = groupAgentActivity(events);
-  const list = (entries) => `<ol class="activity-timeline" aria-label="Agent activity, newest first">${entries.map(activityCard).join("")}</ol>`;
-  return `<div class="activity-overview"><span>${groups.length} ${groups.length === 1 ? "task" : "tasks"} · ${events.length} recorded events</span><span>Newest first</span></div>${list(groups.slice(0, 8))}${groups.length > 8 ? `<details class="activity-earlier"><summary>Show ${groups.length - 8} earlier tasks</summary>${list(groups.slice(8))}</details>` : ""}`;
+  const agents = groupActivityByAgent(events);
+  const tasks = agents.reduce((count, agent) => count + agent.tasks.length, 0);
+  return `<div class="activity-overview"><span>${agents.length} ${agents.length === 1 ? "agent" : "agents"} · ${tasks} ${tasks === 1 ? "task" : "tasks"}</span><span>Latest activity per agent</span></div><ol class="activity-timeline" aria-label="One entry per agent, latest activity first">${agents.map(activityCard).join("")}</ol>`;
 }
 
 function panorama() {

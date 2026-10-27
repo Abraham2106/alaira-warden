@@ -7,7 +7,7 @@ function timeline() {
   const source = fs.readFileSync('src/alaira_warden/static/app.js', 'utf8');
   const context = vm.createContext({ Intl, Date, setTimeout, clearTimeout });
   vm.runInContext(source.slice(0, source.indexOf('document.addEventListener("click"')) + `
-    globalThis.timeline = { state, groupAgentActivity, agentTimeline };
+    globalThis.timeline = { state, groupAgentActivity, groupActivityByAgent, agentTimeline };
   `, context);
   return context.timeline;
 }
@@ -26,7 +26,7 @@ test('task groups preserve retries, outcomes, elapsed time and original event de
   assert.equal(groups[1].latest.status, 'failed');
   const html = ui.agentTimeline(events);
   assert.match(html, /1.0s elapsed/);
-  assert.match(html, /2 recorded events/);
+  assert.match(html, /2 tasks · 4 recorded events/);
   assert.match(html, /Failed/);
   assert.match(html, /&lt;untrusted&gt;/);
   assert.doesNotMatch(html, /<untrusted>/);
@@ -40,6 +40,24 @@ test('public events and separate runs cannot be merged into a fabricated task', 
     event('b', 'decided', 1, null)]).length, 2);
   const first = event('a', 'started', 0);
   assert.equal(ui.groupAgentActivity([first, first]).length, 1);
-  assert.match(ui.agentTimeline(Array.from({ length: 10 }, (_, index) =>
-    ({ ...first, id: String(index), run_id: String(index) }))), /Show 2 earlier tasks/);
+  const html = ui.agentTimeline(Array.from({ length: 10 }, (_, index) =>
+    ({ ...first, id: String(index), run_id: String(index) })));
+  assert.equal((html.match(/<picture /g) || []).length, 1);
+  assert.match(html, /1 agent · 10 tasks/);
+  assert.match(html, /10 tasks · 10 recorded events/);
+});
+
+test('each agent appears once while separate tasks and case context remain inspectable', () => {
+  const ui = timeline();
+  const records = [event('a', 'started', 0, 'one'), event('b', 'decided', 1, 'one'),
+    event('c', 'started', 2, 'two'), event('d', 'failed', 3, 'two'),
+    { ...event('e', 'started', 4, 'three'), agent: 'warden' }];
+  const agents = ui.groupActivityByAgent(records);
+  assert.equal(agents.length, 2);
+  assert.equal(agents.find((group) => group.latest.agent === 'scout').tasks.length, 2);
+  const html = ui.agentTimeline(records);
+  assert.equal((html.match(/<picture /g) || []).length, 2);
+  assert.match(html, /2 agents · 3 tasks/);
+  assert.match(html, /Run one/);
+  assert.match(html, /Run two/);
 });

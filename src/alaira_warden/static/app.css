@@ -57,3 +57,7 @@
 .activity-step-status{font-size:10px;font-weight:600}.activity-details li p{grid-column:1/-1;font-size:11px;color:var(--secondary);line-height:1.6;margin:0;overflow-wrap:anywhere}
 .activity-earlier>summary{margin:0 20px 16px 38px}.activity-earlier[open]>summary{margin-bottom:12px}
 @media(max-width:720px){.activity-overview{padding:0 12px 12px;font-size:10px}.activity-timeline{padding:0 12px 14px}.activity-item{padding-left:12px;margin-left:5px}.activity-card-header,.activity-content{padding:10px}.activity-card-header{gap:7px;flex-wrap:wrap}.activity-card-header>.activity-time{margin-left:auto}.activity-summary{font-size:12px}.activity-earlier>summary{margin-left:24px}}
+
+.activity-task+.activity-task{margin-top:14px;padding-top:12px;border-top:1px solid var(--line-strong)}
+.activity-task h4{font-size:11px;font-weight:600;margin:9px 0 2px}
+.activity-task-context{display:block;font-size:10px;color:var(--secondary);overflow-wrap:anywhere}

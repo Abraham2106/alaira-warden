@@ -76,8 +76,10 @@ def fetch_kev_catalog(
         previous_version = state.get("catalog_version")
         if not isinstance(previous_version, str):
             raise SourceError(
-                category="unsupported", source="cisa-kev", operation="catalog",
-                    reason="invalid_cursor"
+                category="unsupported",
+                source="cisa-kev",
+                operation="catalog",
+                reason="invalid_cursor",
             )
     if added_since is not None:
         added_since = require_aware(added_since, source="cisa-kev", operation="catalog")
@@ -98,14 +100,18 @@ def fetch_kev_catalog(
     payload = result.payload
     if not isinstance(payload, dict) or not isinstance(payload.get("vulnerabilities"), list):
         raise SourceError(
-            category="invalid_response", source="cisa-kev", operation="catalog",
-                reason="unexpected_shape"
+            category="invalid_response",
+            source="cisa-kev",
+            operation="catalog",
+            reason="unexpected_shape",
         )
     version = payload.get("catalogVersion")
     if not isinstance(version, str) or not version.strip():
         raise SourceError(
-            category="invalid_response", source="cisa-kev", operation="catalog",
-                reason="unexpected_shape"
+            category="invalid_response",
+            source="cisa-kev",
+            operation="catalog",
+            reason="unexpected_shape",
         )
     next_cursor = dump_cursor(
         {
@@ -137,15 +143,17 @@ def fetch_kev_catalog(
             entry,
             retrieved_at=retrieved_at,
             catalog_version=version,
-            date_released=payload.get("dateReleased") if isinstance(payload.get("dateReleased"),
-                str) else None,
+            date_released=payload.get("dateReleased")
+            if isinstance(payload.get("dateReleased"), str)
+            else None,
         )
         if warning:
             warnings.append(warning)
         if record is None:
             continue
-        if added_since is not None and (record.published_at is None
-            or record.published_at < added_since):
+        if added_since is not None and (
+            record.published_at is None or record.published_at < added_since
+        ):
             if record.published_at is None:
                 warnings.append("unparsed_timestamp")
             continue
@@ -197,13 +205,18 @@ def normalize_kev_entry(
         catalog_version=catalog_version,
         date_added=added,
         ransomware_use=ransomware if isinstance(ransomware, str) else None,
-        detail=entry.get("requiredAction") if isinstance(entry.get("requiredAction"),
-            str) else None,
+        detail=entry.get("requiredAction")
+        if isinstance(entry.get("requiredAction"), str)
+        else None,
     )
-    title = entry.get("vulnerabilityName") if isinstance(entry.get("vulnerabilityName"),
-        str) else identifier
-    summary = entry.get("shortDescription") if isinstance(entry.get("shortDescription"),
-        str) else None
+    title = (
+        entry.get("vulnerabilityName")
+        if isinstance(entry.get("vulnerabilityName"), str)
+        else identifier
+    )
+    summary = (
+        entry.get("shortDescription") if isinstance(entry.get("shortDescription"), str) else None
+    )
     record = SourceRecord(
         source="cisa-kev",
         source_id=identifier,

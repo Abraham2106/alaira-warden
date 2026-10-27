@@ -53,6 +53,7 @@ def response(status: int, payload, headers=None) -> HttpResponse:
 def pause(bucket: list[float]):
     return lambda seconds: bucket.append(seconds)
 
+
 SECRET = "super-secret-token"
 PRIVATE = "internal-db-password"
 
@@ -101,9 +102,7 @@ def _osv(**extra):
         "affected": [
             {
                 "package": {"ecosystem": "npm", "name": "left-pad"},
-                "ranges": [
-                    {"type": "SEMVER", "events": [{"introduced": "0"}, {"fixed": "1.2.3"}]}
-                ],
+                "ranges": [{"type": "SEMVER", "events": [{"introduced": "0"}, {"fixed": "1.2.3"}]}],
                 "versions": ["1.2.2"],
             }
         ],
@@ -238,8 +237,9 @@ def test_valid_source_and_missing_optional_fields(kind):
     assert record.published_at is None or kind == "cisa-kev"
     if kind == "github":
         assert record.summary is None
-        assert record.severity == [] or all(item.score is None
-            or item.system != "github" for item in record.severity)
+        assert record.severity == [] or all(
+            item.score is None or item.system != "github" for item in record.severity
+        )
     if kind == "nvd":
         assert record.affected == []
         assert record.known_exploited is None
@@ -270,8 +270,9 @@ def test_github_keeps_original_range_alias_and_does_not_fetch_references():
 
 
 def test_github_malware_is_not_assumed_in_the_reviewed_list():
-    payload = _ghsa(type="malware", cve_id=None, identifiers=[{"type": "GHSA",
-        "value": "GHSA-abcd-efgh-ijkl"}])
+    payload = _ghsa(
+        type="malware", cve_id=None, identifiers=[{"type": "GHSA", "value": "GHSA-abcd-efgh-ijkl"}]
+    )
     payload.pop("cvss")
     transport = ScriptTransport([response(200, [payload])])
     batch = fetch_github_advisories(
@@ -437,8 +438,9 @@ def test_github_403_rate_limit_is_not_a_normal_forbidden():
 
 def test_server_error_retries_then_returns_the_record():
     sleeps = []
-    transport = ScriptTransport([response(503, {"error": PRIVATE}), response(200,
-        {"vulns": [_osv()]})])
+    transport = ScriptTransport(
+        [response(503, {"error": PRIVATE}), response(200, {"vulns": [_osv()]})]
+    )
     batch = query_osv(
         package_name="left-pad",
         ecosystem="npm",
@@ -459,9 +461,9 @@ def test_timeout_invalid_json_and_unexpected_shape():
             package_name="left-pad",
             ecosystem="npm",
             version="1.0.0",
-        transport=ScriptTransport([TimeoutError()]),
-        budget=WorkBudget(max_retries=0),
-        sleeper=pause([]),
+            transport=ScriptTransport([TimeoutError()]),
+            budget=WorkBudget(max_retries=0),
+            sleeper=pause([]),
             now=lambda: NOW,
         )
     assert timeout.value.category == "timeout"
@@ -536,8 +538,9 @@ def test_cursor_cannot_leave_the_public_advisory_api():
     )
     transport = ScriptTransport([])
     with pytest.raises(SourceError) as caught:
-        fetch_github_advisories(cursor=evil, transport=transport, sleeper=pause([]),
-            now=lambda: NOW)
+        fetch_github_advisories(
+            cursor=evil, transport=transport, sleeper=pause([]), now=lambda: NOW
+        )
     assert caught.value.reason == "host_not_allowed"
     assert transport.requests == []
     leaked = json.dumps(
@@ -549,15 +552,17 @@ def test_cursor_cannot_leave_the_public_advisory_api():
         }
     )
     with pytest.raises(SourceError) as secret_url:
-        fetch_github_advisories(cursor=leaked, transport=transport, sleeper=pause([]),
-            now=lambda: NOW)
+        fetch_github_advisories(
+            cursor=leaked, transport=transport, sleeper=pause([]), now=lambda: NOW
+        )
     assert secret_url.value.reason == "secret_in_url"
     assert SECRET not in str(secret_url.value)
 
 
 def test_osv_querybatch_ids_are_incomplete_until_detail_is_loaded():
-    batch_payload = {"results": [{"vulns": [{"id": "GHSA-abcd-efgh-ijkl",
-        "modified": "2024-02-02T03:04:05Z"}]}]}
+    batch_payload = {
+        "results": [{"vulns": [{"id": "GHSA-abcd-efgh-ijkl", "modified": "2024-02-02T03:04:05Z"}]}]
+    }
     identifiers = query_osv_batch(
         [{"package": {"name": "left-pad", "ecosystem": "npm"}, "version": "1.0.0"}],
         transport=ScriptTransport([response(200, batch_payload)]),
@@ -596,14 +601,17 @@ def test_osv_page_token_stops_when_the_budget_is_spent():
     assert batch.complete is False
     assert "page-2" in (batch.next_cursor or "")
     assert len(transport.requests) == 1
-    assert "empty_result_is_not_absence_of_risk" in query_osv(
-        package_name="left-pad",
-        ecosystem="npm",
-        version="9.9.9",
-        transport=ScriptTransport([response(200, {"vulns": []})]),
-        sleeper=pause([]),
-        now=lambda: NOW,
-    ).warnings
+    assert (
+        "empty_result_is_not_absence_of_risk"
+        in query_osv(
+            package_name="left-pad",
+            ecosystem="npm",
+            version="9.9.9",
+            transport=ScriptTransport([response(200, {"vulns": []})]),
+            sleeper=pause([]),
+            now=lambda: NOW,
+        ).warnings
+    )
 
 
 def test_nvd_does_not_invent_an_npm_package_and_keeps_original_severity():

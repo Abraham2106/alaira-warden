@@ -16,11 +16,12 @@ def bootstrap(root: Path = ROOT) -> bool:
     app_password = secrets.token_urlsafe(32)
     values = {
         "WARDEN_API_TOKEN": secrets.token_urlsafe(32),
+        "WARDEN_IDENTITY_PEPPER": secrets.token_urlsafe(48),
         "POSTGRES_PASSWORD": owner_password,
         "WARDEN_DB_APP_PASSWORD": app_password,
-        "WARDEN_DATABASE_URL": f"postgresql://warden_app:{app_password}@localhost:5432/warden",
+        "WARDEN_DATABASE_URL": f"postgresql://warden_app:{app_password}@127.0.0.1:5432/warden",
         "WARDEN_MIGRATION_DATABASE_URL": (
-            f"postgresql://warden_owner:{owner_password}@localhost:5432/warden"
+            f"postgresql://warden_owner:{owner_password}@127.0.0.1:5432/warden"
         ),
     }
     template = (root / ".env.example").read_text(encoding="utf-8")

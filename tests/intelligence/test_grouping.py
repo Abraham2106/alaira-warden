@@ -20,12 +20,14 @@ from alaira_warden.intelligence.nvd import normalize_nvd_cve
 from alaira_warden.intelligence.osv import normalize_osv_vulnerability
 
 NOW = datetime(2026, 10, 26, 12, 0, tzinfo=UTC)
-_ATTRIBUTION = Attribution(provider="test", documentation_url="https://example.com/docs",
-    notes="test")
+_ATTRIBUTION = Attribution(
+    provider="test", documentation_url="https://example.com/docs", notes="test"
+)
 
 
-def _manual_record(source, source_id, *, title, aliases=None, status=None, kind=None, warnings=None,
-    digest="a"):
+def _manual_record(
+    source, source_id, *, title, aliases=None, status=None, kind=None, warnings=None, digest="a"
+):
     origin = {"id": source_id, "digest": digest, "title": title}
     return SourceRecord(
         source=source,
@@ -68,8 +70,13 @@ def test_aliases_group_records_and_titles_do_not():
         retrieved_at=NOW,
     )
     nvd, _warning = normalize_nvd_cve(
-        {"cve": {"id": "CVE-2024-1111", "vulnStatus": "Analyzed", "descriptions": [{"lang": "en",
-            "value": "Same title"}]}},
+        {
+            "cve": {
+                "id": "CVE-2024-1111",
+                "vulnStatus": "Analyzed",
+                "descriptions": [{"lang": "en", "value": "Same title"}],
+            }
+        },
         retrieved_at=NOW,
     )
     other = _manual_record("osv", "OSV-unrelated", title="Same title")
@@ -150,8 +157,11 @@ def test_withdrawn_disagreement_is_contradictory_and_revisions_are_history():
     conflict = group_advisories([rejected, reviewed]).groups[0]
     assert conflict.evidence_class == "contradictory"
     old, _warning = normalize_github_advisory(
-        {"ghsa_id": "GHSA-dddd-dddd-dddd", "type": "reviewed",
-            "updated_at": "2024-01-01T00:00:00Z"},
+        {
+            "ghsa_id": "GHSA-dddd-dddd-dddd",
+            "type": "reviewed",
+            "updated_at": "2024-01-01T00:00:00Z",
+        },
         retrieved_at=NOW,
     )
     new, _warning = normalize_github_advisory(
@@ -194,11 +204,17 @@ def test_manual_advisory_without_cve_and_consultation():
     assert {item.source for item in plan} == {"github", "osv", "nvd", "cisa-kev"}
     report = consultation_report(
         batches=[
-            SourceBatch(source="osv", retrieved_at=NOW, records=[], complete=True,
-                warnings=["empty_result_is_not_absence_of_risk"])
+            SourceBatch(
+                source="osv",
+                retrieved_at=NOW,
+                records=[],
+                complete=True,
+                warnings=["empty_result_is_not_absence_of_risk"],
+            )
         ],
-        errors=[SourceError(category="timeout", source="nvd", operation="get_cve",
-            reason="timeout")],
+        errors=[
+            SourceError(category="timeout", source="nvd", operation="get_cve", reason="timeout")
+        ],
     )
     assert report.attempts[1].ok is False
     assert report.attempts[1].error_category == "timeout"

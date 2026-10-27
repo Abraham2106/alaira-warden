@@ -28,7 +28,7 @@ packages = ["src/alaira_warden"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "--tb=short"
+addopts = "--tb=short --import-mode=importlib"
 
 [tool.ruff]
 target-version = "py312"

@@ -4,7 +4,7 @@
 
 Implementación interna en `src/alaira_warden/orchestration/`. Usa el `PostgresSaver` oficial de LangGraph, fijado a 3.2.0 en `uv.lock`. El flujo procesa inventario, fuentes y correlación, una etapa por despacho, y termina en `awaiting_review`. Las etapas se conectan mediante handlers confiables; si falta uno, queda en `requires_intervention` sin inventar evidencia.
 
-No hay endpoint ni worker automático montado todavía. El grafo `/preview` conserva su comportamiento inicial independiente. Los diez escenarios nuevos usan PostgreSQL real y handlers sintéticos; no acreditan las integraciones externas de los frentes ni el cierre de B3.
+La integración posterior monta rutas autenticadas `/runs` con despacho de una etapa por solicitud; no hay worker automático todavía. El grafo `/preview` conserva su comportamiento inicial independiente. Los diez escenarios del núcleo usan PostgreSQL real y handlers sintéticos; la prueba HTTP de `tests/test_product_integration.py` añade los handlers conectados a los frentes con respuestas controladas. No acreditan operaciones reales de patrocinadores ni el cierre completo de B3. Estado actual en `docs/front-integration.md`.
 
 ## Persistencia y operación
 

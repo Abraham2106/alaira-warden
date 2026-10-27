@@ -155,8 +155,9 @@ def normalize_github_advisory(
     label = payload.get("severity")
     if isinstance(label, str) and label:
         severity.append(
-            Severity(system="github", value=label, score=None, source="github",
-                raw={"severity": label})
+            Severity(
+                system="github", value=label, score=None, source="github", raw={"severity": label}
+            )
         )
     cvss = payload.get("cvss")
     if isinstance(cvss, dict) and isinstance(cvss.get("vector_string"), str):
@@ -196,6 +197,7 @@ def normalize_github_advisory(
             content_hash=content_hash(origin),
             references=reference_list(payload.get("references")),
             affected=affected,
+            affected_complete=bool(affected) and not warnings,
             severity=severity,
             known_exploited=None,
             license=None,

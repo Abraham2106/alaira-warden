@@ -167,3 +167,9 @@ Cada archivo contiene un encargo copiable. Debe acompañarse del presente roadma
 **B2:** núcleo determinista implementado después de B1. Usa el motor oficial npm para rangos, intervalos OSV separados, contexto histórico y reglas conservadoras ante datos incompletos. Prueba diferencial de 224 combinaciones y p95 local de 0,8915 s para 10 000 componentes en 20 ejecuciones. Persistencia, ciclo de revisión y conexiones con los frentes siguen pendientes. Evidencia y límites: `docs/bundle-correlation.md`.
 
 **B3:** base de checkpoints PostgreSQL, reanudación entre etapas, exclusión por run, cuotas persistentes, controles y trazas implementada después de B2. Se prueba con handlers sintéticos y el rol SQL de runtime. Falta conectar los frentes, configurar sus llamadas reales y montar el worker autorizado. Evidencia y límites: `docs/bundle-orchestration.md`.
+
+## 10. Recepción e integración posterior
+
+Los cuatro frentes ya se fusionaron en la rama de bundles y están montados mediante `integration/`, identidad individual y migraciones 005–007. El recorrido HTTP hasta evaluación/revisión se prueba con PostgreSQL real y respuestas externas controladas. Los clientes GitHub, OSV, NVD y KEV también se probaron contra sus servicios públicos. El despacho es explícito por API, no un worker automático. B1–B3 siguen sujetos a sus condiciones de cierre; la guía de estado actual es `docs/front-integration.md`.
+
+Las reglas completas proporcionadas por el usuario corrigen B0: Zetaris es obligatorio; Meterless requiere un Engine funcional **y** Nightshift como proveedor principal. No se monta NVIDIA directo. `docs/hackathon-alignment.md` y SRS 1.1 prevalecen sobre las condiciones antiguas de los prompts/handoffs, conservados como historial. El siguiente bloqueo de aceptación es setup real de Zetaris/Nightshift, seguido del Engine y del ciclo de agentes; B4–B7 permanecen pendientes.

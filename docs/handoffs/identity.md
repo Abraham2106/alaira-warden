@@ -237,9 +237,11 @@ from alaira_warden.identity import (
 )
 from alaira_warden.identity.http import create_identity_router
 
+
 def get_identity_auth(request: Request):
     with connect(request.app.state.settings) as connection:
         yield IdentityAuth(PostgresIdentityStore(connection), request.app.state.identity_settings)
+
 
 Identity = Annotated[IdentityAuth, Depends(get_identity_auth)]
 ```

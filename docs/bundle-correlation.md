@@ -2,7 +2,7 @@
 
 ## Estado
 
-Núcleo de evaluación implementado en `src/alaira_warden/correlation/`. Funciona sobre contratos validados y datos de prueba, sin llamadas a fuentes o modelos. No se ha conectado todavía a los módulos de fuentes/inventario ni a endpoints de escritura de hallazgos. El ciclo persistente de reevaluación, cierre y aceptación de riesgo de 1.6.4 queda pendiente junto a la integración del caso.
+Núcleo de evaluación implementado en `src/alaira_warden/correlation/`. Su función es determinista y no llama fuentes ni modelos. La composición posterior `integration/` ya conecta los frentes de fuentes/inventario, persiste evaluaciones y hallazgos y permite revisión/repetición mediante API. El cierre/aceptación de riesgo completo de 1.6.4 sigue pendiente. Estado actual en `docs/front-integration.md`; las mediciones siguientes corresponden al núcleo.
 
 ## Contratos
 

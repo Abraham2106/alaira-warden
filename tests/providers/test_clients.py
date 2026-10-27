@@ -119,7 +119,9 @@ def test_urls_normalize_once_and_reject_embedded_credentials():
     assert meterless_endpoints("http://127.0.0.1:8088/v1/v1")[1] == "http://127.0.0.1:8088/v1"
     assert meterless_endpoints("http://[::1]:8088/healthz")[1] == "http://[::1]:8088/v1"
     assert nvidia_api_base("https://integrate.api.nvidia.com/v1/chat/completions") == NVIDIA_BASE
-    assert zetaris_origin("https://zetaris.example/api/v1.0/auth/login") == "https://zetaris.example"
+    assert (
+        zetaris_origin("https://zetaris.example/api/v1.0/auth/login") == "https://zetaris.example"
+    )
     with pytest.raises(ProviderError, match="embedded credentials") as exc:
         meterless_endpoints("http://user:meterless-token-value@127.0.0.1:8088/v1")
     assert_clean(str(exc.value))
@@ -254,9 +256,7 @@ def test_budget_timeout_redirect_and_invalid_json_stay_finite():
     assert exc.value.kind == "timeout"
     assert len(timed.calls) == 1
 
-    redirected = Scripted(
-        [response(302, "", content_type="text/plain")]
-    )
+    redirected = Scripted([response(302, "", content_type="text/plain")])
     with pytest.raises(ProviderError) as exc:
         meterless(redirected).generate_text(
             model="meterless/auto", prompt="Reply with pong.", max_output_tokens=16, timeout=5
@@ -454,9 +454,7 @@ def test_nvidia_states_and_no_silent_model_substitution():
     assert len(rejected.calls) == 1
     assert json.loads(rejected.calls[0].body.decode())["model"] == "some-other-model"
 
-    partial = Scripted(
-        [response(200, chat("pong", model=MODEL, usage={"prompt_tokens": 4}))]
-    )
+    partial = Scripted([response(200, chat("pong", model=MODEL, usage={"prompt_tokens": 4}))])
     generated = nvidia(partial).generate_text(
         model=MODEL, prompt="Reply with pong.", max_output_tokens=16, timeout=5
     )

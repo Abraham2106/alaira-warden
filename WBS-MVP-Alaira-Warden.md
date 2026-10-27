@@ -2,9 +2,9 @@
 
 | Campo | Valor |
 |---|---|
-| Versión | 1.0 |
-| Fecha | 26 de octubre de 2026 |
-| Estado | Plan de trabajo propuesto; desarrollo pendiente |
+| Versión | 1.1 |
+| Fecha | 27 de octubre de 2026 |
+| Estado | Plan con integración local en curso; aceptación completa pendiente |
 | Documento base | SRS-Alaira-Warden.md, con las integraciones acordadas en esta conversación |
 | Producto final | MVP ejecutable que transforma un aviso de seguridad en una evaluación de exposición y una propuesta de corrección validada y revisable |
 | Unidad de estimación | Horas-persona de trabajo efectivo |
@@ -12,6 +12,8 @@
 ## 1. Alcance y reglas de planificación
 
 Esta estructura de desglose del trabajo (WBS, o EDT) define entregables y paquetes de trabajo para construir el MVP del SRS. No describe funcionalidades ya implementadas. Los identificadores permiten convertir cada paquete en una tarea del tablero de desarrollo y relacionarlo con requisitos y evidencia de cierre.
+
+**Cambio de alcance normativo:** el programa completo suministrado confirma Zetaris obligatorio para todas las entregas: 1.12.2 pasa al alcance base (45 paquetes base y 2 condicionales respecto de la cuenta original). 1.5.2 debe implementar un Engine Meterless y usar Nightshift como proveedor principal; 1.5.3 usa NVIDIA mediante Nightshift cuando aporte. Las estimaciones previas deben revisarse con ese trabajo. Se agregan CA-14–CA-17 del ajuste del hackathon; Cursor es opcional. Véase `docs/hackathon-alignment.md`.
 
 ### 1.1 Resultado comprometido por este plan
 
@@ -383,3 +385,7 @@ La asignación por frentes, contratos v1, propiedad de archivos y secuencia pers
 ### Incremento posterior: bundles B1–B3
 
 Se implementaron personalmente y en secuencia el ejecutor offline B1, el núcleo de correlación B2 y la base persistente de B3. B1 incluye aislamiento Docker y limpieza comprobados con tareas sintéticas reales. B3 añade checkpoints, reanudación entre etapas, exclusión por run, cuotas persistentes, pausa y cancelación cooperativa. Esto hace avanzar 1.2.4, 1.5.1, 1.5.4–1.5.5, 1.6 y 1.10; no cierra sus dependencias de integración ni los criterios completos del SRS. La fotografía inicial de las demás filas se conserva como contexto; los resultados de regresión actualizados están en `docs/verification.md`.
+
+### Integración de frentes
+
+Identidad, inventario, fuentes y proveedores están fusionados. Se conectaron permisos del servidor, SQL, lectura de manifiestos por commit, persistencia de evidencia, correlación, revisiones y propuestas mediante rutas autenticadas. Hay un flujo de investigación comprobado con PostgreSQL real y fuentes controladas, además de consultas públicas reales de los cuatro clientes. Los módulos no equivalen todavía a la entrega completa: faltan setup y uso real de Zetaris/Nightshift, un Engine operativo, la dinámica de agentes, herramientas de validación y B4–B7. Detalle en `docs/front-integration.md`.

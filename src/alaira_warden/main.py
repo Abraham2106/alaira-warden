@@ -1,18 +1,24 @@
-import secrets
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated
 from uuid import UUID
 
 import psycopg
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, status
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
 
 from alaira_warden import __version__
 from alaira_warden.config import Settings, get_settings
 from alaira_warden.db import SchemaNotReady
+from alaira_warden.identity import (
+    audit_actor,
+    create_identity_router,
+    enforce_application,
+    enforce_platform,
+)
+from alaira_warden.integration.auth import Actor, get_identity_auth, identity_settings
+from alaira_warden.integration.routes import create_product_router
 from alaira_warden.integrations import integration_status
 from alaira_warden.models import (
     Application,
@@ -25,20 +31,6 @@ from alaira_warden.repository import Repository
 from alaira_warden.workflow import build_workflow
 
 STATIC = Path(__file__).parent / "static"
-bearer = HTTPBearer(auto_error=False)
-
-
-def require_token(
-    request: Request,
-    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)],
-) -> None:
-    expected = request.app.state.settings.warden_api_token.get_secret_value()
-    if not expected:
-        raise HTTPException(503, "Configure WARDEN_API_TOKEN to enable the development API.")
-    if credentials is None or not secrets.compare_digest(
-        credentials.credentials.encode(), expected.encode()
-    ):
-        raise HTTPException(401, "Invalid API token.", headers={"WWW-Authenticate": "Bearer"})
 
 
 def get_repository(request: Request) -> Repository:
@@ -74,52 +66,61 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/health/ready", tags=["health"])
     def ready(store: Store):
         try:
+            identity_settings(settings)
             store.ready()
-        except (psycopg.Error, SchemaNotReady):
+        except (psycopg.Error, SchemaNotReady, ValueError):
             return JSONResponse(
                 status_code=503,
                 content={"status": "not_ready", "database": "unavailable_or_schema_mismatch"},
             )
         return {"status": "ready", "database": "ok"}
 
-    api = APIRouter(prefix="/api", dependencies=[Depends(require_token)])
+    api = APIRouter(prefix="/api")
 
     @api.get("/integrations", tags=["integrations"])
-    def integrations():
-        return integration_status(settings)
+    def integrations(principal: Actor, store: Store):
+        enforce_platform(principal, "settings.manage")
+        return integration_status(settings, store.integration_checks())
 
     @api.get("/applications", response_model=list[Application], tags=["applications"])
-    def applications(store: Store):
-        return store.applications()
+    def applications(store: Store, principal: Actor):
+        return store.applications(principal)
 
     @api.post("/applications", response_model=Application, status_code=201, tags=["applications"])
-    def create_application(payload: ApplicationCreate, store: Store):
-        return store.create_application(payload)
+    def create_application(payload: ApplicationCreate, store: Store, principal: Actor):
+        enforce_platform(principal, "application.create")
+        return store.create_application(payload, actor=audit_actor(principal))
 
     @api.get("/investigations", response_model=list[Investigation], tags=["investigations"])
-    def investigations(store: Store):
-        return store.investigations()
+    def investigations(store: Store, principal: Actor):
+        return store.investigations(principal)
 
     @api.post(
         "/investigations", response_model=Investigation, status_code=201, tags=["investigations"]
     )
-    def create_investigation(payload: InvestigationCreate, store: Store):
+    def create_investigation(payload: InvestigationCreate, store: Store, principal: Actor):
+        enforce_application(
+            principal,
+            "investigation.create",
+            payload.application_id,
+            lambda identifier: store.application(identifier) is not None,
+        )
         try:
-            return store.create_investigation(payload)
+            return store.create_investigation(payload, actor=audit_actor(principal))
         except psycopg.errors.ForeignKeyViolation as exc:
             raise HTTPException(404, "Application not found.") from exc
 
     @api.get("/investigations/{identifier}", response_model=Investigation, tags=["investigations"])
-    def investigation(identifier: UUID, store: Store):
+    def investigation(identifier: UUID, store: Store, principal: Actor):
         case = store.investigation(identifier)
         if case is None:
             raise HTTPException(404, "Investigation not found.")
+        enforce_application(principal, "investigation.read", case["application_id"], lambda _: True)
         return case
 
     @api.post("/investigations/{identifier}/preview", tags=["workflow"])
-    def preview(identifier: UUID, store: Store):
-        if store.investigation(identifier) is None:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "Investigation not found.")
+    def preview(identifier: UUID, store: Store, principal: Actor):
+        investigation(identifier, store, principal)
         return app.state.workflow.invoke(
             {
                 "case_id": str(identifier),
@@ -131,6 +132,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
 
     app.include_router(api)
+    app.include_router(create_identity_router(get_identity_auth))
+    app.include_router(create_product_router(get_repository))
     app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
     @app.get("/", include_in_schema=False)

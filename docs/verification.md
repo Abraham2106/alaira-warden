@@ -39,6 +39,20 @@ La imagen se reconstruye con Node/node-semver y el checkpointer oficial PostgreS
 
 Detalles, comandos y límites: `docs/bundle-execution.md`, `docs/bundle-correlation.md`, `docs/bundle-orchestration.md` y `docs/implementation-roadmap.md`. La integración de los cuatro frentes y la implementación B4–B7 siguen pendientes; los núcleos B1–B3 no equivalen al cierre de sus bundles completos.
 
+## Integración posterior de los cuatro frentes
+
+Se fusionaron las cuatro ramas y se montaron identidad individual, SQL, inventario, fuentes y evaluación en rutas autenticadas. Estado detallado en `docs/front-integration.md`. El contrato actualizado del evento y sus CA-14–CA-17 están en `docs/hackathon-alignment.md`, normativo para SRS 1.1.
+
+**Regresión final:** 339 pruebas aprobadas, 1 omitida, en 74,74 s. Se habilitaron PostgreSQL de prueba, la prueba SQL del frente identidad, Docker real y comparación npm. La omitida es la sonda de red opcional: se ejecutó aparte y pasó. Ruff y formato aprobados, 134 archivos Python. CI remoto no ejecutado; su configuración ahora incluye la prueba SQL de identidad y el ejemplo sin credenciales.
+
+Los ocho escenarios HTTP nuevos comprueban el recorrido completo hasta evaluación/revisión, ámbito de aplicaciones y permisos, importación de despliegues, lectura de vistas Zetaris inyectadas sin sustitución del snapshot, alta y revocación de credenciales reales, política de envío denegada, ausencia de verificación inventada sin configuración y puente de modelos autorizado con salida controlada. El resultado del modelo no cambia la exposición.
+
+Los cuatro clientes públicos recibidos también se ejecutaron contra Internet mediante `scripts/probe_integrated_sources.py`: GitHub 1 aviso, OSV 5, NVD 1 y KEV 1758; todos lotes completos, con advertencias de identidad npm conservadas para NVD/KEV. Evidencia local: `artifacts/integration/public-clients.json`. La sonda no usa claves ni datos privados y no acredita patrocinadores.
+
+El ejemplo `scripts/sample_case.py` aprobó tres clasificaciones sintéticas sin PostgreSQL ni claves. Los servicios host 8000 y Docker 8001 respondieron 200 a readiness, sesión individual y aplicaciones autenticadas; no se imprimió la credencial inicial. No se ha repetido una inspección visual de la UI ni montado los controles nuevos de investigación en sus pantallas.
+
+**Pendientes:** acceso/instancia y operación real de Zetaris; Nightshift configurado y atendiendo la función principal; Engine Meterless conforme; dinámica de agentes con crítica/feedback; herramientas npm/Syft/Trivy/OSV-Scanner en el ejecutor, remediación, aprobación/PR y aceptación completa. No se declara cerrado el MVP ni CA-01–CA-17 por haber aprobado pruebas de componentes e integración local.
+
 ## Planned — Implementación del MVP
 
 - Lectura real de GitHub, OSV, NVD y CISA KEV.

@@ -171,8 +171,9 @@ def _assess(
 
 
 def _group(members: Sequence[SourceRecord]) -> AdvisoryGroup:
-    ordered = sorted(members, key=lambda record: (record.source, record.source_id,
-        record.content_hash))
+    ordered = sorted(
+        members, key=lambda record: (record.source, record.source_id, record.content_hash)
+    )
     identifiers: list[str] = []
     for member in ordered:
         for identifier in _identifiers(member):

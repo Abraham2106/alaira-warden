@@ -3,14 +3,16 @@
 
 | Campo | Valor |
 |---|---|
-| Versión | 1.0 |
-| Fecha | 26 de octubre de 2026 |
+| Versión | 1.1 |
+| Fecha | 27 de octubre de 2026 |
 | Estado | Borrador para revisión y aprobación |
 | Fuente | Propuesta de proyecto suministrada por el solicitante |
 | Nombre de trabajo | ALAIRA Warden; pendiente de confirmación |
 | Alcance del documento | Visión del producto y línea base propuesta para el MVP del hackathon |
 
 Este documento transforma la propuesta en requisitos verificables. No afirma que las integraciones estén implementadas ni que sus proveedores dispongan de interfaces específicas. Las decisiones añadidas para concretar el alcance se identifican como propuestas y requieren validación antes de convertir este borrador en una línea base contractual.
+
+**Actualización normativa 1.1:** las reglas completas suministradas por el solicitante hacen obligatorios Zetaris como capa de datos, Nightshift como proveedor principal y al menos un Meterless Engine operativo. [El ajuste del hackathon](docs/hackathon-alignment.md) incorpora RF-46–RF-49 y CA-14–CA-17, incluido modo de ejemplo sin credenciales, y prevalece sobre cualquier mención condicional anterior. CA-01–CA-13 siguen vigentes. NVIDIA se conecta mediante Nightshift; Cursor es opcional.
 
 ## 1. Introducción
 
@@ -280,10 +282,10 @@ Cada adaptador debe definir autenticación, operaciones permitidas, esquema de e
 | NVD | Datos de vulnerabilidades, identificadores CVE y señales de severidad/producto. | MVP; tratarlo como fuente de datos pública, conservar atribución NIST y revisar condiciones de registros de terceros. |
 | CISA KEV | Catálogo de vulnerabilidades conocidas como explotadas, usado como señal de priorización. | MVP; datos del catálogo bajo CC0 1.0. |
 | Grok | Investigación de publicaciones y reportes relacionados con amenazas. | Solo si el acceso provisto por el hackathon está disponible; toda salida se verifica con evidencia. |
-| Zetaris | Consulta e integración de información distribuida. | Solo si se requiere para el desafío y existe acceso habilitado por el hackathon. |
-| NVIDIA | Razonamiento y síntesis de evidencia técnica. | Modelo/proveedor disponible para el hackathon; no sustituye comprobaciones deterministas. |
+| Zetaris | Capa de datos para consultar inventario y evidencia de la investigación. | Obligatorio para toda entrega según las reglas del evento suministradas por el solicitante. PostgreSQL puede conservar estado transaccional, checkpoints y auditoría; la ruta operativa de investigación debe usar Zetaris. |
+| NVIDIA | Razonamiento y síntesis mediante modelos conectados a Nightshift. | Integrar donde contribuya. El premio NVIDIA exige al menos un Nemotron vía Nightshift en una función operativa y mostrar qué modelo procesó la solicitud. No sustituye comprobaciones deterministas. |
 | Cursor | Asistencia de desarrollo para preparar cambios y pruebas. | Uso dentro del flujo de desarrollo; integración programática solo si el hackathon la requiere y está disponible. |
-| Meterless | Acceso o gestión de solicitudes a modelos, según el alcance habilitado. | Requerido por el hackathon; confirmar el contrato técnico y usar el acceso proporcionado. |
+| Meterless | Nightshift como proveedor principal de IA y al menos un Engine en una función operativa. | Son dos obligaciones distintas: un cliente HTTP o listar modelos no demuestra un Engine. H-MEM, Markovian, World Model o Scout Intent requieren implementación y prueba de su función. |
 | PostgreSQL | Persistencia de inventarios, investigaciones y auditoría. | Usar si la persistencia relacional es necesaria para el MVP. |
 | OpenTelemetry | Trazas y métricas, con redacción de datos sensibles. | Usar para observabilidad cuando sea necesario durante el hackathon. |
 | Docker | Entornos aislados para instalación y pruebas. | Usar para ejecutar código de repositorios de prueba con límites de permisos, red y recursos. |

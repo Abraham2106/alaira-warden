@@ -92,6 +92,7 @@ class SourceRecord(BaseModel):
     content_hash: str
     references: list[str] = Field(default_factory=list)
     affected: list[AffectedEntry] = Field(default_factory=list)
+    affected_complete: bool = False
     severity: list[Severity] = Field(default_factory=list)
     known_exploited: KnownExploited | None = None
     license: str | None = None

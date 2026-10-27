@@ -59,8 +59,10 @@ def manual_advisory(
 
     if not description.strip():
         raise SourceError(
-            category="unsupported", source="manual", operation="intake",
-                reason="description_required"
+            category="unsupported",
+            source="manual",
+            operation="intake",
+            reason="description_required",
         )
     url = clean_reference(source_url)
     if url is None:
@@ -75,8 +77,10 @@ def manual_advisory(
         raise SourceError(
             category="unsupported", source="manual", operation="intake", reason="invalid_identifier"
         )
-    source_id = canonical or "manual:" + content_hash({"url": url,
-        "received_at": received.isoformat()})[:32]
+    source_id = (
+        canonical
+        or "manual:" + content_hash({"url": url, "received_at": received.isoformat()})[:32]
+    )
     origin = {
         "source_url": url,
         "description": description.strip(),
@@ -234,8 +238,10 @@ def resume(
         start = payload.get("start_index") if isinstance(payload.get("start_index"), int) else 0
         if not isinstance(cve_id, str):
             raise SourceError(
-                category="unsupported", source="nvd", operation="cve_history",
-                    reason="invalid_cursor"
+                category="unsupported",
+                source="nvd",
+                operation="cve_history",
+                reason="invalid_cursor",
             )
         return fetch_nvd_cve(
             cve_id,
@@ -254,8 +260,10 @@ def resume(
     if source == "cisa-kev":
         return fetch_kev_catalog(cursor=cursor, **common)
     raise SourceError(
-        category="unsupported", source="resume", operation="resume",
-            reason="cursor_source_unsupported"
+        category="unsupported",
+        source="resume",
+        operation="resume",
+        reason="cursor_source_unsupported",
     )
 
 

@@ -2,7 +2,9 @@
 
 Scaffold del sistema multiagente de inteligencia y respuesta defensiva ante vulnerabilidades.
 
-**Estado:** estructura inicial ejecutable. Incluye API, interfaz local, persistencia de aplicaciones y avisos manuales, migración SQL, vista previa LangGraph, autenticación de desarrollo y conexión opcional a un colector OpenTelemetry. Los adaptadores de inteligencia, modelos, escaneo y generación de parches aún no están implementados.
+**Estado:** integración local operativa por API: identidad individual y permisos por aplicación, inventario npm por commit, clientes GitHub/OSV/NVD/KEV, evidencia persistente, correlación determinista y reanudación LangGraph. La UI conserva el scaffold consolidado; las operaciones nuevas están en Swagger. Todavía no genera parches ni cumple las integraciones reales de patrocinadores.
+
+[Guía del flujo integrado](docs/front-integration.md) · [Requisitos corregidos del hackathon](docs/hackathon-alignment.md)
 
 ## Requisitos
 
@@ -12,7 +14,7 @@ Scaffold del sistema multiagente de inteligencia y respuesta defensiva ante vuln
 
 Las dependencias Python se encuentran en `pyproject.toml`; `uv.lock` fija las versiones resueltas. Los componentes nuevos de implementación son open source. Los proveedores externos siguen el alcance acordado en el SRS.
 
-Los primeros incrementos añaden un ejecutor Docker offline interno, correlación determinista y una base de orquestación con checkpoints PostgreSQL, cuotas y controles persistentes. Son bibliotecas probadas; todavía no están expuestas como funciones operativas de la UI ni conectadas con los adaptadores pendientes. Evidencia y límites en [B1](docs/bundle-execution.md), [B2](docs/bundle-correlation.md) y [B3](docs/bundle-orchestration.md).
+El ejecutor Docker offline, la correlación y los checkpoints PostgreSQL están implementados. La composición de los cuatro frentes se encuentra en `integration/`; la investigación usa las rutas `/runs`, conserva la revisión humana y falla de forma explícita ante información incompleta. Evidencia y límites en [B1](docs/bundle-execution.md), [B2](docs/bundle-correlation.md) y [B3](docs/bundle-orchestration.md).
 
 ## Arranque con Docker
 
@@ -22,13 +24,22 @@ Desde la raíz del repositorio, en PowerShell:
 python scripts/bootstrap.py
 ```
 
-El script crea `.env` con credenciales aleatorias y conserva cualquier archivo existente. Consulta `WARDEN_API_TOKEN` localmente para acceder a la UI. Luego:
+El script crea `.env` con credenciales aleatorias y conserva cualquier archivo existente. Incluye `WARDEN_IDENTITY_PEPPER`; las instalaciones existentes deben configurarlo sin cambiar otros secretos. El token compartido ya no da acceso a la API. Luego:
 
 ```powershell
 docker compose up -d --build --wait api
 ```
 
-Abre [la aplicación](http://localhost:8000) e introduce ese token en el formulario de acceso. PostgreSQL utiliza un volumen local; el servicio `migrate` aplica las migraciones antes de arrancar la API. Los puertos publicados solo escuchan en localhost. El migrador usa `warden_owner` y la API `warden_app`, que no puede editar auditoría ni ejecutar migraciones.
+Provisiona la identidad administradora una sola vez y copia su credencial sin mostrarla:
+
+```powershell
+docker compose exec -T api python -m alaira_warden.identity.bootstrap /tmp/warden-admin.token
+New-Item -ItemType Directory -Force artifacts/private | Out-Null
+docker compose cp api:/tmp/warden-admin.token artifacts/private/administrator.token
+docker compose exec -T api python -c "from pathlib import Path; Path('/tmp/warden-admin.token').unlink()"
+```
+
+Abre [la aplicación](http://localhost:8000) e introduce la credencial del archivo en el formulario de acceso. El almacén de identidades debe estar vacío para este primer aprovisionamiento; no lo repitas si ya lo realizaste. PostgreSQL utiliza un volumen local y `migrate` aplica las migraciones antes de arrancar la API. El migrador usa `warden_owner` y la API `warden_app`, que no puede editar auditoría ni ejecutar migraciones.
 
 Si cambias contraseñas manualmente, usa valores aptos para una URL PostgreSQL o codifícalos. Cambiar una variable después de crear el volumen no cambia la contraseña del usuario existente. Consulta [la guía de infraestructura](docs/infrastructure.md) para puertos alternativos, roles, respaldo y operación.
 
@@ -41,6 +52,7 @@ uv sync --frozen
 npm ci --ignore-scripts
 docker compose -f compose.yaml -f compose.dev.yaml up -d db
 uv run python -m alaira_warden.db
+uv run python scripts/provision_identity.py  # una sola vez, almacén de identidades vacío
 uv run uvicorn alaira_warden.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
@@ -90,7 +102,7 @@ compose.observability.yaml
 
 ## API inicial
 
-La documentación interactiva está en [Swagger](http://localhost:8000/docs). Las rutas `/api/` requieren `Authorization: Bearer <WARDEN_API_TOKEN>`.
+La documentación interactiva está en [Swagger](http://localhost:8000/docs). Las rutas `/api/` requieren `Authorization: Bearer <credencial individual>` y permiso para la acción/aplicación. El token compartido legado es rechazado.
 
 | Método | Ruta | Función |
 |---|---|---|
@@ -102,21 +114,18 @@ La documentación interactiva está en [Swagger](http://localhost:8000/docs). La
 | GET | `/api/investigations/{id}` | Recupera un aviso registrado. |
 | POST | `/api/investigations/{id}/preview` | Ejecuta el grafo inicial sin escanear ni modificar el caso. |
 
-La vista previa termina en `requires_intervention` porque faltan los adaptadores de inventario y fuentes. No cambia el estado persistido, no clasifica exposición, no llama modelos ni ejecuta código de repositorios.
+La vista previa conserva su detención inicial y no representa el flujo operativo nuevo. La investigación integrada se ejecuta con `/runs`, documentado en la guía de integración. No cambia el estado persistido, no clasifica exposición, no llama modelos ni ejecuta código de repositorios.
 
 ## Integraciones y límites
 
-Las variables `WARDEN_GITHUB_TOKEN`, `WARDEN_NVD_API_KEY`, `WARDEN_METERLESS_*`, `WARDEN_NVIDIA_*`, `WARDEN_GROK_API_KEY`, `WARDEN_ZETARIS_API_KEY` y `WARDEN_CURSOR_API_KEY` aceptan credenciales reales cuando existan. Un valor no vacío solo indica que el secreto está presente; no habilita el conector ni lo marca como verificado. OSV, CISA KEV, Syft, Trivy y OSV-Scanner no usan secreto en este scaffold.
+Las variables se detallan en `.env.example`. GitHub y NVD admiten credenciales opcionales; OSV y KEV son públicos. Un secreto presente no demuestra una operación exitosa.
 
-- **Pendientes del MVP:** GitHub Security, OSV, NVD, CISA KEV, Syft, Trivy y OSV-Scanner.
-- **Requerida por el hackathon:** Meterless; su contrato técnico y acceso todavía deben verificarse.
-- **Candidata de modelos:** NVIDIA, condicionada a acceso e interfaz verificados.
-- **Condicionales:** Grok/X, Zetaris y Cursor programático. Cursor puede utilizarse como herramienta del equipo desde ahora.
-- **Base implementada:** PostgreSQL mediante SQL, LangGraph para la vista previa y OpenTelemetry para trazas HTTP. El contenedor de la API funciona sin privilegios, pero todavía no existe un ejecutor de código no confiable.
+- **Obligatorios del hackathon:** Zetaris como capa de datos, Nightshift como proveedor principal y al menos un Meterless Engine funcional. Setup y aceptación real pendientes.
+- **NVIDIA:** mediante Nightshift donde aporte; para el premio, Nemotron en una función operativa con el modelo identificado. La clave se configura en Nightshift Providers.
+- **Cursor:** herramienta opcional de desarrollo; no se exige su API. Grok no es un requisito del evento suministrado.
+- **Pendientes del producto:** Engine, interacción dinámica de agentes, Syft/Trivy/OSV-Scanner reales, corrección validada, aprobación y PR.
 
-Para habilitar trazas, configura `OTEL_EXPORTER_OTLP_ENDPOINT` con la URL base OTLP/HTTP de un colector de confianza. Se agrega `/v1/traces`. Sin esa variable no se exportan trazas. No se envían cabeceras de autenticación ni cuerpos de aplicación como atributos. No se añade un proveedor de observabilidad cerrado.
-
-El token compartido identifica un único desarrollador local; no implementa usuarios, roles de aplicación ni separación entre proyectos. El rol SQL del runtime tiene auditoría de solo adición; el propietario administrativo conserva sus facultades de mantenimiento. Se requiere implementar los demás controles del SRS antes de usar el sistema con datos reales o exponerlo fuera de localhost.
+Modo de ejemplo sin credenciales ni Postgres: `uv run python scripts/sample_case.py` después de `npm ci`. Declara datos sintéticos y ausencia de uso de patrocinadores. No reemplaza sus pruebas reales.
 
 ## Documentos del proyecto
 
@@ -133,3 +142,6 @@ El token compartido identifica un único desarrollador local; no implementa usua
 - [Bundle B1: ejecutor seguro](docs/bundle-execution.md)
 - [Bundle B2: correlación](docs/bundle-correlation.md)
 
+
+- [Conexión de los cuatro frentes y endpoints](docs/front-integration.md)
+- [Ajuste de obligaciones del hackathon](docs/hackathon-alignment.md)

@@ -40,6 +40,9 @@ class RunRequest(BaseModel):
     max_attempts: int = Field(default=9, ge=1, le=30)
     max_active_seconds: int = Field(default=180, ge=1, le=1800)
     stage_seconds: int = Field(default=30, ge=1, le=120)
+    snapshot_id: UUID | None = None
+    advisory_identifier: str | None = Field(default=None, max_length=100)
+    data_mode: Literal["local", "zetaris"] = "local"
 
     @model_validator(mode="after")
     def stage_fits_budget(self):
@@ -74,6 +77,9 @@ class StageContext:
     deadline: float
     cancelled: Callable[[], bool]
     references: Mapping[str, tuple[str, ...]]
+    snapshot_id: UUID | None = None
+    advisory_identifier: str | None = None
+    data_mode: str = "local"
 
 
 class RunBusy(RuntimeError):
@@ -246,6 +252,9 @@ class WorkflowRuntime:
             deadline,
             cancelled,
             MappingProxyType({key: tuple(value) for key, value in state["references"].items()}),
+            request.snapshot_id,
+            request.advisory_identifier,
+            request.data_mode,
         )
         with tracer.start_as_current_span(f"workflow.{stage}") as span:
             span.set_attribute("warden.run_id", str(identifier))

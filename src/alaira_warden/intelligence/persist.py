@@ -88,6 +88,9 @@ def _advisory_id(connection: SqlConnection, record: SourceRecord) -> str:
         ),
     )
     row = cursor.fetchone()
-    if row is None or row[0] is None:
+    if row is None:
         raise RuntimeError("advisory upsert did not return an id")
-    return str(row[0])
+    identifier = row["id"] if isinstance(row, dict) else row[0]
+    if identifier is None:
+        raise RuntimeError("advisory upsert did not return an id")
+    return str(identifier)

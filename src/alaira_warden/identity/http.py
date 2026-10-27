@@ -95,10 +95,15 @@ def enforce_platform(principal: Principal | None, action: str) -> None:
 
 
 class IdentityAuth:
-    def __init__(self, store: IdentityStore, settings: IdentitySettings) -> None:
+    def __init__(self, store: IdentityStore, settings: IdentitySettings, audit=None) -> None:
         self.store = store
         self.settings = settings
         self.authenticator = Authenticator(store, settings)
+        self.audit = audit
+
+    def record_action(self, principal, identifier, action):
+        if self.audit is not None:
+            self.audit(principal, identifier, action)
 
     def require_principal(self, request: Request) -> Principal:
         try:
@@ -162,61 +167,78 @@ def no_store(response: Response) -> None:
     response.headers["Pragma"] = "no-cache"
 
 
-def create_identity_router(auth: IdentityAuth) -> APIRouter:
+def create_identity_router(auth: IdentityAuth | Callable) -> APIRouter:
     """Admin identity routes. Mount them only inside an already authorized server process."""
+
+    def fixed_auth():
+        return auth
+
+    get_auth = fixed_auth if isinstance(auth, IdentityAuth) else auth
+
+    def authenticated(request: Request, identity: Annotated[IdentityAuth, Depends(get_auth)]):
+        return identity.require_principal(request)
+
     router = APIRouter(prefix="/api/identity", tags=["identity"], dependencies=[Depends(no_store)])
 
     @router.get("/session")
     def session(
-        principal: Annotated[Principal, Depends(auth.require_principal)],
+        principal: Annotated[Principal, Depends(authenticated)],
+        identity: Annotated[IdentityAuth, Depends(get_auth)],
     ) -> dict[str, object]:
         return principal.public_dict()
 
     @router.get("/subjects")
     def subjects(
-        principal: Annotated[Principal, Depends(auth.require_principal)],
+        principal: Annotated[Principal, Depends(authenticated)],
+        identity: Annotated[IdentityAuth, Depends(get_auth)],
     ) -> list[dict[str, object]]:
         try:
-            return [item.public_dict() for item in list_identity_subjects(auth.store, principal)]
+            return [
+                item.public_dict() for item in list_identity_subjects(identity.store, principal)
+            ]
         except Exception as exc:
             raise _http_error(exc) from None
 
     @router.post("/subjects", status_code=201)
     async def subjects_create(
         request: Request,
-        principal: Annotated[Principal, Depends(auth.require_principal)],
+        principal: Annotated[Principal, Depends(authenticated)],
+        identity: Annotated[IdentityAuth, Depends(get_auth)],
     ) -> dict[str, object]:
         enforce_platform(principal, "settings.manage")
         body = _body(SubjectDraft, await _json_body(request))
         try:
             created = create_subject(
-                auth.store,
+                identity.store,
                 principal,
                 display_name=body.display_name,
                 assignments=body.assignments,
             )
         except Exception as exc:
             raise _http_error(exc) from None
+        identity.record_action(principal, created.subject_id, "identity.subject_created")
         return created.public_dict()
 
     @router.post("/subjects/{subject_id}/credentials", status_code=201)
     async def credentials_issue(
         subject_id: UUID,
         request: Request,
-        principal: Annotated[Principal, Depends(auth.require_principal)],
+        principal: Annotated[Principal, Depends(authenticated)],
+        identity: Annotated[IdentityAuth, Depends(get_auth)],
     ) -> dict[str, str]:
         enforce_platform(principal, "settings.manage")
         body = _body(CredentialBody, await _json_body(request))
         try:
             issued = issue_subject_credential(
-                auth.store,
+                identity.store,
                 principal,
                 subject_id,
-                pepper=auth.settings.pepper_bytes(),
+                pepper=identity.settings.pepper_bytes(),
                 label=body.label,
             )
         except Exception as exc:
             raise _http_error(exc) from None
+        identity.record_action(principal, issued.credential_id, "identity.credential_issued")
         return {
             "credential_id": str(issued.credential_id),
             "subject_id": str(issued.subject_id),
@@ -226,10 +248,11 @@ def create_identity_router(auth: IdentityAuth) -> APIRouter:
     @router.get("/subjects/{subject_id}/credentials")
     def credentials_list(
         subject_id: UUID,
-        principal: Annotated[Principal, Depends(auth.require_principal)],
+        principal: Annotated[Principal, Depends(authenticated)],
+        identity: Annotated[IdentityAuth, Depends(get_auth)],
     ) -> list[dict[str, object]]:
         try:
-            rows = list_subject_credentials(auth.store, principal, subject_id)
+            rows = list_subject_credentials(identity.store, principal, subject_id)
         except Exception as exc:
             raise _http_error(exc) from None
         return [row.public_dict() for row in rows]
@@ -237,26 +260,30 @@ def create_identity_router(auth: IdentityAuth) -> APIRouter:
     @router.post("/credentials/{credential_id}/revocation")
     def credentials_revoke(
         credential_id: UUID,
-        principal: Annotated[Principal, Depends(auth.require_principal)],
+        principal: Annotated[Principal, Depends(authenticated)],
+        identity: Annotated[IdentityAuth, Depends(get_auth)],
     ) -> dict[str, object]:
         try:
-            revoked = revoke_subject_credential(auth.store, principal, credential_id)
+            revoked = revoke_subject_credential(identity.store, principal, credential_id)
         except Exception as exc:
             raise _http_error(exc) from None
+        identity.record_action(principal, credential_id, "identity.credential_revoked")
         return revoked.public_dict()
 
     @router.post("/subjects/{subject_id}/status")
     async def subjects_status(
         subject_id: UUID,
         request: Request,
-        principal: Annotated[Principal, Depends(auth.require_principal)],
+        principal: Annotated[Principal, Depends(authenticated)],
+        identity: Annotated[IdentityAuth, Depends(get_auth)],
     ) -> dict[str, bool]:
         enforce_platform(principal, "settings.manage")
         body = _body(StatusBody, await _json_body(request))
         try:
-            set_subject_active(auth.store, principal, subject_id, is_active=body.is_active)
+            set_subject_active(identity.store, principal, subject_id, is_active=body.is_active)
         except Exception as exc:
             raise _http_error(exc) from None
+        identity.record_action(principal, subject_id, "identity.status_changed")
         return {"is_active": body.is_active}
 
     return router

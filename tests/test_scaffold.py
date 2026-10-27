@@ -1,4 +1,6 @@
 import json
+from types import SimpleNamespace
+from uuid import uuid4
 
 import psycopg
 import pytest
@@ -8,15 +10,33 @@ from pydantic import ValidationError
 from alaira_warden.adapters import AdapterNotImplemented, invoke
 from alaira_warden.config import Settings
 from alaira_warden.db import SchemaNotReady
+from alaira_warden.identity.principal import Assignment, build_principal
+from alaira_warden.integration.auth import get_principal
 from alaira_warden.main import create_app, get_repository
 from alaira_warden.models import ApplicationCreate
 from alaira_warden.workflow import build_workflow
 
 
+def admin():
+    return build_principal(
+        uuid4(),
+        is_active=True,
+        assignments=[Assignment(role="administrador", application_id=None)],
+        authentication_method="api_credential",
+    )
+
+
 @pytest.fixture
 def client():
-    settings = Settings(_env_file=None, warden_api_token="test-token")
+    settings = Settings(
+        _env_file=None,
+        warden_api_token="test-token",
+        warden_identity_pepper="test-pepper-long-enough",
+    )
     with TestClient(create_app(settings)) as connection:
+        connection.app.dependency_overrides[get_repository] = lambda: SimpleNamespace(
+            integration_checks=lambda: []
+        )
         yield connection
 
 
@@ -45,11 +65,15 @@ def test_unconfigured_auth_fails_closed():
 
 
 def test_pending_integrations_are_not_reported_as_verified(client):
+    client.app.dependency_overrides[get_principal] = admin
     response = client.get("/api/integrations", headers={"Authorization": "Bearer test-token"})
     assert response.status_code == 200
     rows = response.json()
     assert {row["id"] for row in rows} >= {"meterless", "osv", "nvd", "cisa-kev", "syft", "trivy"}
-    assert all(row["status"] == "not_implemented" and row["verified"] is False for row in rows)
+    assert all(
+        row["status"] in {"not_implemented", "implemented_unverified"} and row["verified"] is False
+        for row in rows
+    )
 
 
 def test_configured_secret_is_not_verified_or_echoed():
@@ -58,14 +82,19 @@ def test_configured_secret_is_not_verified_or_echoed():
         _env_file=None,
         warden_api_token="test-token",
         warden_github_token=secret,
+        warden_identity_pepper="test-pepper-long-enough",
     )
     with TestClient(create_app(settings)) as client:
+        client.app.dependency_overrides[get_principal] = admin
+        client.app.dependency_overrides[get_repository] = lambda: SimpleNamespace(
+            integration_checks=lambda: []
+        )
         response = client.get("/api/integrations", headers={"Authorization": "Bearer test-token"})
     rows = response.json()
     github = next(row for row in rows if row["id"] == "github")
     assert github["auth"]["configured"] is True
     assert github["verified"] is False
-    assert github["status"] == "not_implemented"
+    assert github["status"] == "implemented_unverified"
     payload = json.dumps(rows)
     assert secret not in payload
     assert "ghp_" not in payload

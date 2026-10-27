@@ -1,46 +1,21 @@
 """Optional real database smoke test. CI provides an isolated PostgreSQL service."""
 
 import os
-from contextlib import contextmanager
-from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
-from psycopg.conninfo import conninfo_to_dict
 from psycopg.errors import InsufficientPrivilege
 
-from alaira_warden.config import Settings
-from alaira_warden.db import connect, migrate
+from alaira_warden.db import connect
 from alaira_warden.main import create_app
-from alaira_warden.repository import Repository
 
 
 @pytest.mark.skipif(
     not os.getenv("WARDEN_TEST_DATABASE_URL"), reason="No isolated PostgreSQL test URL configured"
 )
-def test_migrations_and_persistent_api_roundtrip(monkeypatch):
-    url = os.environ["WARDEN_TEST_DATABASE_URL"]
-    assert conninfo_to_dict(url).get("dbname", "").endswith("_test"), (
-        "Only a database with a name ending in _test may run this check."
-    )
-    settings = Settings(_env_file=None, warden_database_url=url, warden_api_token="postgres-test")
-    with connect(settings) as connection:
-        if not connection.execute("SELECT 1 FROM pg_roles WHERE rolname = 'warden_app'").fetchone():
-            connection.execute("CREATE ROLE warden_app NOLOGIN")
-    directory = Path(__file__).resolve().parents[1] / "migrations"
-    migrate(directory, settings)
-    migrate(directory, settings)
-
-    @contextmanager
-    def runtime_connection(runtime_settings):
-        with connect(runtime_settings) as connection:
-            connection.execute("SET LOCAL ROLE warden_app")
-            yield connection
-
-    # Exercise the actual application privileges, not the schema owner's privileges.
-    monkeypatch.setattr("alaira_warden.repository.connect", runtime_connection)
-    Repository(settings).ready()
-    headers = {"Authorization": "Bearer postgres-test"}
+def test_migrations_and_persistent_api_roundtrip(monkeypatch, product):
+    settings = product["settings"]
+    headers = product["headers"]
     with TestClient(create_app(settings)) as client:
         assert client.get("/health/ready").status_code == 200
         application = client.post(

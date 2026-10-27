@@ -136,8 +136,10 @@ def url_present(settings: Settings, item: AdapterSpec) -> bool:
     return bool(getattr(settings, item.url_env.lower()).strip())
 
 
-def integration_status(settings: Settings) -> list[dict]:
+def integration_status(settings: Settings, checks=()) -> list[dict]:
     rows = []
+    latest = {row["adapter"]: row["payload"] for row in checks}
+    connected = {"github", "osv", "nvd", "cisa-kev", "meterless", "zetaris"}
     for item in ADAPTERS:
         configured = secret_present(settings, item) or url_present(settings, item)
         if item.secret_env is None and item.url_env is None:
@@ -155,10 +157,19 @@ def integration_status(settings: Settings) -> list[dict]:
                 "name": item.name,
                 "kind": item.kind,
                 "scope": item.scope,
-                "status": "not_implemented",
-                "verified": False,
+                "status": latest.get(item.id, {}).get(
+                    "status",
+                    "implemented_unverified" if item.id in connected else "not_implemented",
+                ),
+                "verified": latest.get(item.id, {}).get("verified", False) is True,
+                "verified_operation": latest.get(item.id, {}).get("operation"),
+                "last_checked_at": latest.get(item.id, {}).get("checked_at"),
+                "engine_verified": False if item.id == "meterless" else None,
                 "auth": auth,
-                "notes": item.notes,
+                "notes": "Client connected; verification applies only to the recorded operation. "
+                "Sponsor acceptance remains pending."
+                if item.id in connected
+                else item.notes,
             }
         )
     return rows

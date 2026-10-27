@@ -173,8 +173,9 @@ def fetch_nvd_cve(
         api_key=nvd_api_key,
     )
     if not records:
-        return _batch(retrieved_at, [], True, None, ["not_found",
-            "empty_result_is_not_absence_of_risk"])
+        return _batch(
+            retrieved_at, [], True, None, ["not_found", "empty_result_is_not_absence_of_risk"]
+        )
     if not include_changes:
         return _batch(retrieved_at, records, complete, None, warnings)
     if limits.remaining_requests() <= 0 or limits.expired():
@@ -193,8 +194,9 @@ def fetch_nvd_cve(
     )
     records[0] = records[0].model_copy(update={"changes": changes})
     warnings.extend(history_warnings)
-    return _batch(retrieved_at, records, complete and history_complete, history_cursor,
-        dedupe(warnings))
+    return _batch(
+        retrieved_at, records, complete and history_complete, history_cursor, dedupe(warnings)
+    )
 
 
 def fetch_nvd_modified(
@@ -216,8 +218,9 @@ def fetch_nvd_modified(
     if cursor:
         state = load_cursor(cursor, source="nvd", operation="list_cves")
         params = state.get("params")
-        if not isinstance(params, dict) or not all(isinstance(value,
-            str) for value in params.values()):
+        if not isinstance(params, dict) or not all(
+            isinstance(value, str) for value in params.values()
+        ):
             raise SourceError(
                 category="unsupported", source="nvd", operation="list_cves", reason="invalid_cursor"
             )
@@ -227,8 +230,10 @@ def fetch_nvd_modified(
         end = require_aware(modified_until or clock(), source="nvd", operation="list_cves")
         if end < start:
             raise SourceError(
-                category="unsupported", source="nvd", operation="list_cves",
-                    reason="invalid_date_window"
+                category="unsupported",
+                source="nvd",
+                operation="list_cves",
+                reason="invalid_date_window",
             )
         window_end = min(end, start + _WINDOW)
         query = {
@@ -252,8 +257,9 @@ def fetch_nvd_modified(
     cursor_text = None
     if next_params:
         complete = False
-        cursor_text = dump_cursor({"v": 1, "source": "nvd", "operation": "list_cves",
-            "params": next_params})
+        cursor_text = dump_cursor(
+            {"v": 1, "source": "nvd", "operation": "list_cves", "params": next_params}
+        )
     if not records and complete:
         warnings.append("empty_result_is_not_absence_of_risk")
     return _batch(retrieved_at, records, complete, cursor_text, dedupe(warnings))
@@ -271,8 +277,11 @@ def _collect_cves(
 ) -> tuple[list[SourceRecord], bool, list[str], dict[str, str] | None]:
     records: list[SourceRecord] = []
     warnings: list[str] = []
-    current = {key: value for key, value in params.items() if key not in {"pendingWindowStart",
-        "pendingWindowEnd"}}
+    current = {
+        key: value
+        for key, value in params.items()
+        if key not in {"pendingWindowStart", "pendingWindowEnd"}
+    }
     pending_start = params.get("pendingWindowStart")
     pending_end = params.get("pendingWindowEnd")
     if pending_start:
@@ -313,8 +322,10 @@ def _collect_cves(
         payload = result.payload
         if not isinstance(payload, dict) or not isinstance(payload.get("vulnerabilities"), list):
             raise SourceError(
-                category="invalid_response", source="nvd", operation="list_cves",
-                    reason="unexpected_shape"
+                category="invalid_response",
+                source="nvd",
+                operation="list_cves",
+                reason="unexpected_shape",
             )
         for item in payload["vulnerabilities"]:
             if not isinstance(item, dict):
@@ -327,8 +338,11 @@ def _collect_cves(
                 records.append(record)
                 warnings.extend(record.warnings)
         total = payload.get("totalResults")
-        start = payload.get("startIndex") if isinstance(payload.get("startIndex"),
-            int) else int(current.get("startIndex", "0"))
+        start = (
+            payload.get("startIndex")
+            if isinstance(payload.get("startIndex"), int)
+            else int(current.get("startIndex", "0"))
+        )
         count = len(payload["vulnerabilities"])
         if isinstance(total, int) and start + count < total:
             if not count:
@@ -486,8 +500,11 @@ def _severities(metrics: object) -> list[Severity]:
             vector = data.get("vectorString") if isinstance(data, dict) else None
             version = data.get("version") if isinstance(data, dict) else None
             score = data.get("baseScore") if isinstance(data, dict) else None
-            numeric = float(score) if isinstance(score, int | float) and not isinstance(score,
-                bool) else None
+            numeric = (
+                float(score)
+                if isinstance(score, int | float) and not isinstance(score, bool)
+                else None
+            )
             found.append(
                 Severity(
                     system=f"CVSS_V{version}" if isinstance(version, str) else None,

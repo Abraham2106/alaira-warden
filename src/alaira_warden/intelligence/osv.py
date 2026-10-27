@@ -120,8 +120,11 @@ def normalize_osv_vulnerability(
             warnings.append("affected_package_name_missing")
             continue
         versions = entry.get("versions")
-        version_list = [item for item in versions if isinstance(item, str)] if isinstance(versions,
-            list) else None
+        version_list = (
+            [item for item in versions if isinstance(item, str)]
+            if isinstance(versions, list)
+            else None
+        )
         ranges = entry.get("ranges") if isinstance(entry.get("ranges"), list) else []
         affected.append(
             AffectedEntry(
@@ -166,6 +169,7 @@ def normalize_osv_vulnerability(
         content_hash=content_hash(origin),
         references=reference_list(payload.get("references")),
         affected=affected,
+        affected_complete=bool(affected) and not warnings,
         severity=severity,
         known_exploited=None,
         license=payload.get("license") if isinstance(payload.get("license"), str) else None,
@@ -251,22 +255,27 @@ def query_osv_batch(
                     operation="querybatch",
                     reason="invalid_cursor",
                 )
-            records = [_placeholder(item, retrieved_at) for item in pending if isinstance(item,
-                str)]
+            records = [
+                _placeholder(item, retrieved_at) for item in pending if isinstance(item, str)
+            ]
             return _resolve(records, retrieved_at, worker, limits, pause, clock, [])
         raw_queries = state.get("queries")
         if not isinstance(raw_queries, list):
             raise SourceError(
-                category="unsupported", source="osv", operation="querybatch",
-                    reason="invalid_cursor"
+                category="unsupported",
+                source="osv",
+                operation="querybatch",
+                reason="invalid_cursor",
             )
         pending_queries = [item for item in raw_queries if isinstance(item, dict)]
     else:
         pending_queries = [dict(item) for item in queries]
     if max_queries < 1:
         raise SourceError(
-            category="unsupported", source="osv", operation="querybatch",
-                reason="invalid_batch_size"
+            category="unsupported",
+            source="osv",
+            operation="querybatch",
+            reason="invalid_batch_size",
         )
     records: list[SourceRecord] = []
     warnings: list[str] = ["identifiers_only"]
@@ -299,11 +308,13 @@ def query_osv_batch(
         except SourceError as error:
             if records:
                 warnings.append(error.warning_code)
-                return _batch(retrieved_at, records, False, _batch_cursor(pending_queries),
-                    warnings)
+                return _batch(
+                    retrieved_at, records, False, _batch_cursor(pending_queries), warnings
+                )
             raise
-        page_records, next_queries, page_warnings = _parse_batch_page(result.payload, chunk,
-            retrieved_at)
+        page_records, next_queries, page_warnings = _parse_batch_page(
+            result.payload, chunk, retrieved_at
+        )
         records.extend(page_records)
         warnings.extend(page_warnings)
         pending_queries = next_queries + pending_queries[max_queries:]
@@ -347,8 +358,9 @@ def fetch_osv_vulnerability(
         now=clock,
     )
     if result.status_code == 404 or result.payload is None:
-        return _batch(retrieved_at, [], True, None, ["not_found",
-            "empty_result_is_not_absence_of_risk"])
+        return _batch(
+            retrieved_at, [], True, None, ["not_found", "empty_result_is_not_absence_of_risk"]
+        )
     if not isinstance(result.payload, dict):
         raise SourceError(
             category="invalid_response",
@@ -446,8 +458,10 @@ def _follow_query(
                 warnings.append("unexpected_shape")
                 return _batch(retrieved_at, records, False, _query_cursor(current), warnings)
             raise SourceError(
-                category="invalid_response", source="osv", operation="query",
-                    reason="unexpected_shape"
+                category="invalid_response",
+                source="osv",
+                operation="query",
+                reason="unexpected_shape",
             )
         for item in payload["vulns"]:
             if not isinstance(item, dict):
@@ -474,14 +488,18 @@ def _parse_batch_page(
 ) -> tuple[list[SourceRecord], list[dict[str, Any]], list[str]]:
     if not isinstance(payload, dict) or not isinstance(payload.get("results"), list):
         raise SourceError(
-            category="invalid_response", source="osv", operation="querybatch",
-                reason="unexpected_shape"
+            category="invalid_response",
+            source="osv",
+            operation="querybatch",
+            reason="unexpected_shape",
         )
     results = payload["results"]
     if len(results) != len(queries):
         raise SourceError(
-            category="invalid_response", source="osv", operation="querybatch",
-                reason="result_count_mismatch"
+            category="invalid_response",
+            source="osv",
+            operation="querybatch",
+            reason="result_count_mismatch",
         )
     records: list[SourceRecord] = []
     follow: list[dict[str, Any]] = []
@@ -528,10 +546,12 @@ def _resolve(
         if budget.remaining_requests() <= 0 or budget.expired():
             warnings.append("budget_exceeded")
             resolved.extend(pending)
-            identifiers = [item.source_id for item in pending
-                if "detail_not_loaded" in item.warnings]
-            cursor = dump_cursor({"v": 1, "source": "osv", "operation": "details",
-                "ids": identifiers})
+            identifiers = [
+                item.source_id for item in pending if "detail_not_loaded" in item.warnings
+            ]
+            cursor = dump_cursor(
+                {"v": 1, "source": "osv", "operation": "details", "ids": identifiers}
+            )
             return _batch(retrieved_at, resolved, False, cursor, dedupe(warnings))
         try:
             detail = fetch_osv_vulnerability(
@@ -545,8 +565,9 @@ def _resolve(
             warnings.append(error.warning_code)
             resolved.extend(pending)
             identifiers = [item.source_id for item in pending]
-            cursor = dump_cursor({"v": 1, "source": "osv", "operation": "details",
-                "ids": identifiers})
+            cursor = dump_cursor(
+                {"v": 1, "source": "osv", "operation": "details", "ids": identifiers}
+            )
             return _batch(retrieved_at, resolved, False, cursor, dedupe(warnings))
         pending.pop(0)
         if detail.records:
@@ -575,8 +596,12 @@ def _query_cursor(body: Mapping[str, Any]) -> str:
 
 def _batch_cursor(queries: Sequence[Mapping[str, Any]]) -> str:
     return dump_cursor(
-        {"v": 1, "source": "osv", "operation": "querybatch",
-            "queries": [dict(item) for item in queries]}
+        {
+            "v": 1,
+            "source": "osv",
+            "operation": "querybatch",
+            "queries": [dict(item) for item in queries],
+        }
     )
 
 

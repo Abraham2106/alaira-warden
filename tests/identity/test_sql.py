@@ -1,6 +1,7 @@
 import os
 
 import pytest
+from psycopg.conninfo import conninfo_to_dict
 
 from alaira_warden.identity.sql import PROPOSED_IDENTITY_DDL, PROVISION_ADVISORY_LOCK
 
@@ -17,7 +18,7 @@ def test_proposed_ddl_stores_digests_and_does_not_connect():
 
 
 def assert_isolated_test_database(url: str) -> str:
-    name = url.split("?", 1)[0].rstrip("/").rsplit("/", 1)[-1]
+    name = conninfo_to_dict(url).get("dbname", "")
     if not name.endswith("_test"):
         raise RuntimeError("Refusing a database whose name does not end with _test.")
     return name

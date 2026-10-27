@@ -11,6 +11,19 @@ class ApplicationCreate(BaseModel):
 
     name: str = Field(min_length=1, max_length=120)
     repository: str = Field(min_length=3, max_length=201)
+    owner: str | None = Field(default=None, max_length=200)
+    organization: str | None = Field(default=None, max_length=200)
+    criticality: Literal["low", "medium", "high", "critical"] | None = None
+    environments: list[str] = Field(default_factory=list, max_length=20)
+
+    @field_validator("environments")
+    @classmethod
+    def validate_environments(cls, value):
+        if len(set(value)) != len(value) or any(
+            not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,62}", item) for item in value
+        ):
+            raise ValueError("Use unique environment names with letters, numbers, dots or hyphens.")
+        return value
 
     @field_validator("repository")
     @classmethod
@@ -39,6 +52,6 @@ class InvestigationCreate(BaseModel):
 
 class Investigation(InvestigationCreate):
     id: UUID
-    status: Literal["detected", "requires_intervention"]
-    exposure: Literal["undetermined"]
+    status: Literal["detected", "requires_intervention", "investigating", "awaiting_review"]
+    exposure: Literal["undetermined", "not_affected", "potential", "confirmed"]
     created_at: datetime

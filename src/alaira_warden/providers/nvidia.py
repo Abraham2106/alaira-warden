@@ -152,11 +152,7 @@ class NvidiaClient:
                 reason="investigation requires at least one evidence record",
             )
         evidence_payload = [item.model_dump() for item in evidence]
-        prompt = (
-            f"{_INVESTIGATION_SYSTEM}\n"
-            f"Evidence: {evidence_payload}\n"
-            f"Task: {task.strip()}"
-        )
+        prompt = f"{_INVESTIGATION_SYSTEM}\nEvidence: {evidence_payload}\nTask: {task.strip()}"
         result = self.generate_text(
             model=model,
             prompt=prompt,
@@ -217,4 +213,3 @@ class NvidiaClient:
             reason=safe_reason(reason, self._secrets),
             verified=verified,
         )
-

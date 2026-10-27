@@ -1,0 +1,7 @@
+{
+  "name": "ranges-only",
+  "version": "1.0.0",
+  "dependencies": {
+    "left-pad": "^99.0.0"
+  }
+}

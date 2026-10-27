@@ -48,11 +48,12 @@ test('plan approval requires a human decision and an empty justification field',
   const app = ui();
   app.state.authenticated = true; app.state.database = true;
   app.state.investigations = [{ id: 'case' }];
+  app.state.context = { plans: [{ content_hash: "test-plan-hash", payload: {} }] };
   await app.performAction('approve-plan', {});
   const markup = app.nodes.get('modal-content').innerHTML;
   assert.match(markup, /id="approval-form"/);
   assert.match(markup, /minlength="10"/);
-  assert.match(markup, /rows="3"><\/textarea>/);
+  assert.match(markup, /rows="4"[^>]*><\/textarea>/);
   assert.doesNotMatch(markup, /Demo review/);
 });
 

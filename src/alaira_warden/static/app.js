@@ -142,9 +142,9 @@ function operationsCase() {
   const patchPayload = patchRow?.payload || {};
   const validationPayload = validationRow?.payload || {};
   const plan = responseStage("01", "Response plan", "Action, evidence, compatibility, validation, and rollback.", planRow ? `<div class="stage-placeholders"><div><span>Action</span><p>${escapeHTML(planPayload.action || "—")}</p></div><div><span>Packages</span><p>${escapeHTML((planPayload.packages || []).join(", ") || "None")}</p></div><div><span>Rollback</span><p>${escapeHTML(planPayload.rollback || "—")}</p></div></div><p>${escapeHTML(planPayload.justification || "")}</p><p class="inline-pending">${escapeHTML(planPayload.compromise_follow_up || "")}</p>` : `<div class="stage-placeholders"><div><span>Strategy</span><p>No recommendation until exposure is assessed.</p></div><div><span>Compatibility</span><p>No analysis recorded.</p></div><div><span>Rollback</span><p>Will be defined with the proposal.</p></div></div>`, planRow ? String(planPayload.action || "Ready") : "Pending");
-  const patch = responseStage("02", "Proposed change", "Isolated diff. Merge remains prohibited.", patchRow ? `<div class="diff-scaffold"><div class="diff-file-list">${icon("cases")}<span>${escapeHTML((patchPayload.files || []).join(", ") || "No files")}</span></div><pre class="code-panel">${escapeHTML(patchPayload.diff || patchPayload.note || "")}</pre></div><div class="stage-footer"><span>${escapeHTML(patchPayload.note || "Labeled diff")}</span>${button("Attempt merge", "forbid-merge", "lock", false, false, "RF-37: the Guardian rejects merge, deploy, and secrets.")}</div>` : `<div class="diff-scaffold"><div class="diff-file-list">${icon("cases")}<span>No files modificados</span></div><div class="diff-empty">${icon("patch")}<span>The diff appears when Patchwright prepares an isolated change.</span></div></div><div class="stage-footer"><span>No PR is published in the MVP</span>${button("Attempt merge", "forbid-merge", "lock", false, !item)}</div>`, patchRow ? "Isolated" : "Pending");
+  const patch = responseStage("02", "Proposed change", "Isolated diff. Merge remains prohibited.", patchRow ? `<div class="diff-scaffold"><div class="diff-file-list">${icon("cases")}<span>${escapeHTML((patchPayload.files || []).join(", ") || "No files")}</span></div><pre class="code-panel">${escapeHTML(patchPayload.diff || patchPayload.note || "")}</pre></div><div class="stage-footer"><span>${escapeHTML(patchPayload.note || "Labeled diff")}</span><span class="merge-lock">${icon("lock")}Merge blocked by policy</span></div>` : `<div class="diff-scaffold"><div class="diff-file-list">${icon("cases")}<span>No files modificados</span></div><div class="diff-empty">${icon("patch")}<span>The diff appears when Patchwright prepares an isolated change.</span></div></div><div class="stage-footer"><span>No PR is published in the MVP</span></div>`, patchRow ? "Isolated" : "Pending");
   const validation = responseStage("03", "Validation", "A missing tool does not approve.", `<div class="validation-checks">${(validationPayload.results || [["Functional tests", "Project install and tests"], ["Syft", "Updated inventory"], ["Trivy", "Dependency scan"], ["OSV-Scanner", "Advisory cross-check"]].map(([name, detail]) => ({ tool: name, reason: detail, status: "not_executed" }))).map((row) => `<div><span class="validation-icon">${icon("check")}</span><div><strong>${escapeHTML(row.tool || row[0] || "tool")}</strong><small>${escapeHTML(row.reason || row[1] || "")}</small></div>${badge(row.status === "not_executed" ? "Not executed" : String(row.status || "Pending"))}</div>`).join("")}</div>`, validationPayload.overall || "Pending");
-  const approval = responseStage("04", "Review and approval", "A human decision on a specific artifact.", `<div class="approval-summary"><p>${approvalRow ? `${escapeHTML(approvalRow.decision)} · ${escapeHTML(approvalRow.artifact_kind || "plan")}. ${escapeHTML(approvalRow.justification || "")}` : "Approve the labeled plan. If the diff changes, the prior approval is void. Merge remains prohibited."}</p><div class="actions">${button("Close case", "close-case", "", false, !item)}${button("Approve plan", "approve-plan", "approval", true, !planRow)}${button("Attempt merge", "forbid-merge", "lock", false, !item)}</div></div>`, approvalRow ? String(approvalRow.decision) : "Pending");
+  const approval = responseStage("04", "Review and approval", "A human decision on a specific artifact.", `<div class="approval-summary"><p>${approvalRow ? `${escapeHTML(approvalRow.decision)} · ${escapeHTML(approvalRow.artifact_kind || "plan")}. ${escapeHTML(approvalRow.justification || "")}` : "Approve the labeled plan. If the diff changes, the prior approval is void. Merge remains prohibited."}</p><div class="actions">${button("Close case", "close-case", "", false, !item)}${button("Approve plan", "approve-plan", "approval", true, !planRow)}${button("Test merge guardrail (demo)", "forbid-merge", "lock", false, !item, "Demo only: sends a merge request so you can watch Warden refuse it.")}</div></div>`, approvalRow ? String(approvalRow.decision) : "Pending");
   const runPanel = `<section class="case-block"><div class="case-block-heading"><h3>${icon("layers")}Investigation run</h3>${latestRun ? badge(latestRun.status) : badge("No run", "sand")}</div><div class="case-block-body"><p>${latestRun ? `Stage ${escapeHTML(String(latestRun.stage))} · attempts ${escapeHTML(String(latestRun.attempts))}/${escapeHTML(String(latestRun.max_attempts))}` : "Inventory → sources → correlation. One stage per advance. Critique does not change exposure."}</p><div class="case-actions">${button("Refresh inventory", "refresh-inventory", "refresh", false, !item)}${button("Start run", "start-run", "plus", true, !item)}${button("Advance stage", "advance-run", "arrow", false, !latestRun)}${button("Pause", "pause-run", "clock", false, !latestRun)}${button("Cancel", "cancel-run", "", false, !latestRun)}${button("Compose plan", "compose-plan", "patch", false, !assessments.length)}${button("Prepare diff", "prepare-patch", "patch", false, !assessments.length)}${button("Validate", "validate-patch", "check", false, !assessments.length)}${button("Approve plan", "approve-plan", "approval", false, !assessments.length)}${button("Synthesis", "synthesis", "signal", false, !assessments.length)}${button("Export report", "export-report", "download", false, !item)}${button("Close case", "close-case", "", false, !item)}</div>${runs.length ? `<ul class="timeline">${runs.slice(0, 4).map((run) => `<li>${escapeHTML(run.status)} · ${escapeHTML(String(run.stage))}<small>${escapeHTML(date(run.updated_at || run.started_at))}</small></li>`).join("")}</ul>` : ""}</div></section>`;
   const memoryPanel = `<section class="case-block"><div class="case-block-heading"><h3>${icon("info")}H-MEM and critique</h3>${badge(memory?.available ? "Recall" : "No recall", memory?.available ? "green" : "sand")}</div><div class="case-block-body"><p>${escapeHTML((memory?.context || "The engine reinjects prior evidence when recall exists. It does not assign exposure.").slice(0, 400))}</p>${critique ? `<p><strong>Critique ${escapeHTML(critique.status)}</strong> ${escapeHTML((critique.evaluator || critique.reason || "").slice(0, 280))}</p>` : "<p class=\"inline-pending\">Planner/evaluator critique is skipped if Nightshift is not configured.</p>"}</div></section>`;
   const history = `<section class="case-block history-block"><div class="case-block-heading"><h3>${icon("clock")}History and traceability</h3>${badge(runs.length ? "Runs" : "Partial query")}</div><div class="case-block-body">${item ? `<ul class="timeline"><li>Advisory recorded<small>${escapeHTML(date(item.created_at))} · persisted record</small></li>${latestRun ? `<li>Last run ${escapeHTML(latestRun.status)}<small>${escapeHTML(date(latestRun.updated_at))}</small></li>` : ""}</ul>` : '<p>Actions will appear here once an investigation exists.</p>'}${state.preview && item && state.preview.case_id === item.id ? `<details class="preview-details"><summary>Preview result</summary><p>The sample flow does not replace real runs.</p><pre class="code-panel">${escapeHTML(JSON.stringify(state.preview, null, 2))}</pre></details>` : ""}</div></section>`;
@@ -395,26 +395,34 @@ async function performAction(action, target) {
   if (action === "close-case") {
     const item = selectedInvestigation();
     if (!item || !requireWritable()) return;
-    openModal("Close investigation", `<p>Closing keeps evidence and does not merge code. Choose the outcome and justify the decision.</p><form id="close-form">${field("close-outcome", "Outcome", '<select id="close-outcome" name="outcome" required><option value="discarded">Discarded</option><option value="not_affected">Not affected</option><option value="risk_accepted">Risk accepted</option><option value="cancelled">Cancelled</option></select>')}${field("close-justification", "Justification (at least 10 characters)", '<textarea id="close-justification" name="justification" required minlength="10" maxlength="2000" rows="3">Closed from the operations center. Merge remains prohibited.</textarea>')}${formActions("Close case")}</form>`);
+    openModal("Close investigation", `<p>Closing keeps evidence and does not merge code. Choose the outcome and justify the decision.</p><form id="close-form">${field("close-outcome", "Outcome", '<select id="close-outcome" name="outcome" required><option value="discarded">Discarded</option><option value="not_affected">Not affected</option><option value="risk_accepted">Risk accepted</option><option value="cancelled">Cancelled</option></select>')}${field("close-justification", "Justification (at least 10 characters)", '<textarea id="close-justification" name="justification" required minlength="10" maxlength="2000" rows="3" placeholder="Why is this the right outcome? Cite the evidence you reviewed."></textarea>')}${formActions("Close case")}</form>`);
   }
   if (action === "forbid-merge") {
     const item = selectedInvestigation();
     if (!item || !requireWritable()) return;
     try {
       await api(`/api/investigations/${item.id}/merge`, { method: "POST" });
+      announce("Unexpected: the API accepted a merge request. Report this immediately.", "error");
     } catch (error) {
-      announce(error.message, "error");
+      announce(error.status === 403 ? "Guardrail held: Warden refused the merge and logged the attempt." : error.message, error.status === 403 ? "success" : "error");
       await refreshData(true);
     }
   }
-  if (action === "compose-plan" || action === "prepare-patch" || action === "validate-patch" || action === "approve-plan" || action === "export-report") {
+  if (action === "approve-plan") {
+    const item = selectedInvestigation();
+    if (!item || !requireWritable()) return;
+    const planRow = state.context?.plans?.[0];
+    if (!planRow) { announce("Compose a plan before reviewing it.", "error"); return; }
+    const plan = planRow.payload || {};
+    openModal("Review plan", `<p>You are deciding on this exact version of the plan. If the plan or its diff changes, this decision is void. Approval never merges code.</p><dl class="approval-artifact"><div><dt>Action</dt><dd>${escapeHTML(plan.action || "—")}</dd></div><div><dt>Packages</dt><dd>${escapeHTML((plan.packages || []).join(", ") || "None")}</dd></div><div><dt>Rollback</dt><dd>${escapeHTML(plan.rollback || "—")}</dd></div><div><dt>Composed</dt><dd>${escapeHTML(date(planRow.created_at))}</dd></div><div><dt>Version</dt><dd><code>${escapeHTML(String(planRow.content_hash || "—").slice(0, 16))}</code></dd></div></dl>${plan.justification ? `<p class="field-hint">Agent rationale: ${escapeHTML(plan.justification)}</p>` : ""}<form id="approval-form" data-hash="${escapeHTML(planRow.content_hash || "")}">${field("approval-decision", "Decision", '<select id="approval-decision" name="decision" required><option value="" selected disabled>Choose a decision</option><option value="approved">Approve this plan</option><option value="rejected">Reject this plan</option></select>')}${field("approval-justification", "Your justification (at least 10 characters)", '<textarea id="approval-justification" name="justification" required minlength="10" maxlength="2000" rows="4" placeholder="What did you check, and why is this the right call?"></textarea>', "Recorded with your identity in the audit trail.")}${formActions("Record decision")}</form>`);
+  }
+  if (action === "compose-plan" || action === "prepare-patch" || action === "validate-patch" || action === "export-report") {
     const item = selectedInvestigation();
     if (!item || !requireWritable()) return;
     const routes = {
       "compose-plan": ["/api/investigations/" + item.id + "/plan", { method: "POST" }],
       "prepare-patch": ["/api/investigations/" + item.id + "/patch", { method: "POST" }],
       "validate-patch": ["/api/investigations/" + item.id + "/validate", { method: "POST" }],
-      "approve-plan": ["/api/investigations/" + item.id + "/approval", { method: "POST", body: JSON.stringify({ artifact_kind: "plan", decision: "approved", justification: "Demo review of the labeled plan artifact." }) }],
       "export-report": ["/api/investigations/" + item.id + "/report", { method: "GET" }],
     };
     const [path, options] = routes[action];
@@ -422,7 +430,7 @@ async function performAction(action, target) {
     if (action === "export-report") {
       openModal("Exportable report", `<pre class="code-panel">${escapeHTML(JSON.stringify(result, null, 2).slice(0, 8000))}</pre><div class="dialog-actions">${button("Close", "close-modal", "", true)}</div>`);
     } else {
-      announce(action === "approve-plan" ? "Human approval recorded. Merge remains prohibited." : "The crew recorded the next act.", "success");
+      announce("The crew recorded the next act.", "success");
       await refreshData(true);
     }
   }
@@ -469,7 +477,7 @@ document.addEventListener("input", (event) => {
 document.addEventListener("invalid", (event) => { event.target.setAttribute("aria-invalid", "true"); }, true);
 document.addEventListener("submit", async (event) => {
   const form = event.target;
-  if (!["connect-form", "application-form", "investigation-form", "close-form"].includes(form.id)) return;
+  if (!["connect-form", "application-form", "investigation-form", "close-form", "approval-form"].includes(form.id)) return;
   event.preventDefault();
   const payload = Object.fromEntries(new FormData(form));
   const submit = form.querySelector("button[type=submit]");
@@ -486,6 +494,14 @@ document.addEventListener("submit", async (event) => {
       await api(`/api/investigations/${item.id}/close`, { method: "POST", body: JSON.stringify(payload) });
       $("modal").close(); await refreshData(true);
       announce("Case closed. Evidence is preserved and merge remains prohibited.", "success");
+    } else if (form.id === "approval-form") {
+      const item = selectedInvestigation();
+      if (!item) throw new Error("Select an investigation.");
+      const latest = (await api(`/api/investigations/${item.id}/context`))?.plans?.[0];
+      if (!latest || latest.content_hash !== form.dataset.hash) throw Object.assign(new Error("The plan changed while you were reviewing it. Close this dialog and review the new version."), { final: true });
+      await api(`/api/investigations/${item.id}/approval`, { method: "POST", body: JSON.stringify({ artifact_kind: "plan", decision: payload.decision, justification: payload.justification }) });
+      $("modal").close(); await refreshData(true);
+      announce(payload.decision === "approved" ? "Approval recorded for this plan version. Merge remains prohibited." : "Rejection recorded. The plan stays unapproved.", "success");
     } else {
       const endpoint = form.id === "application-form" ? "/api/applications" : "/api/investigations";
       const result = await api(endpoint, { method: "POST", body: JSON.stringify(payload) });
@@ -495,7 +511,7 @@ document.addEventListener("submit", async (event) => {
       announce(form.id === "application-form" ? "Registered application." : "Advisory recorded. Exposure remains undetermined.", "success");
     }
   } catch (error) {
-    const message = form.id === "connect-form" ? error.message : `${error.message} If the submission lost connection, refresh the list before retrying.`;
+    const message = form.id === "connect-form" || error.final ? error.message : `${error.message} If the submission lost connection, refresh the list before retrying.`;
     if ($("modal").open && $("form-error")) { $("form-error").textContent = message; $("form-error").hidden = false; }
     else announce(message, "error");
   } finally { submit.disabled = false; submit.textContent = originalText; form.setAttribute("aria-busy", "false"); form.dataset.state = "idle"; }

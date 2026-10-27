@@ -14,12 +14,12 @@
   <div class="app-shell">
     <aside class="sidebar" id="sidebar" aria-label="Main navigation">
       <a class="brand" href="#overview" aria-label="ALAIRA Warden, overview"><img src="/static/assets/alaira-logo.png" alt="" width="34" height="34"><span>ALAIRA<span class="brand-product">Warden</span></span></a>
-      <button class="workspace-switch" type="button" data-action="settings"><span class="workspace-avatar">A</span><span>Workspace<small>Local environment</small></span><span class="subtle" aria-hidden="true">⌄</span></button>
+      <button class="workspace-switch" type="button" data-action="settings"><span class="workspace-avatar">A</span><span>Workspace<small>Local environment</small></span></button>
       <button class="new-investigation" type="button" data-action="new-case"><span aria-hidden="true">＋</span>New investigation</button>
       <nav id="navigation" aria-label="Sections"></nav>
       <div class="sidebar-bottom">
         <div class="safety-note"><span class="status-dot"></span><span>Supervised autonomy<small>Actions require review</small></span></div>
-        <button class="profile" type="button" data-action="connect"><span class="profile-avatar">L</span><span>Local development<small id="profile-status">Not connected</small></span><span aria-hidden="true">↗</span></button>
+        <button class="profile" type="button" data-action="connect"><span class="profile-avatar">L</span><span>Local development<small id="profile-status">Not connected</small></span></button>
       </div>
     </aside>
     <button class="nav-scrim" id="nav-scrim" type="button" aria-label="Close navigation" data-action="nav-toggle" hidden></button>
@@ -27,7 +27,7 @@
       <header class="topbar">
         <button class="icon-button mobile-menu" type="button" data-action="nav-toggle" aria-label="Open navigation" aria-controls="sidebar" aria-expanded="false">☰</button>
         <div class="breadcrumb"><span>Local workspace</span><span aria-hidden="true">/</span><strong id="breadcrumb-current">Overview</strong></div>
-        <div class="topbar-actions"><button class="icon-button" data-action="help" type="button" aria-label="Help and scope">?</button><span class="topbar-divider"></span><button class="connection-button" data-action="connect" type="button"><span class="status-dot" id="connection-dot"></span><span id="connection-label">Connect environment</span><span aria-hidden="true">⌄</span></button></div>
+        <div class="topbar-actions"><button class="icon-button" data-action="help" type="button" aria-label="Help and scope">?</button><span class="topbar-divider"></span><button class="connection-button" data-action="connect" type="button"><span class="status-dot" id="connection-dot"></span><span id="connection-label">Connect environment</span></button></div>
       </header>
       <main id="main-content" tabindex="-1">
         <div id="environment-message" class="environment-message" hidden></div>

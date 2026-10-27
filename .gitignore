@@ -14,4 +14,6 @@ build/
 artifacts/
 node_modules/
 reports/local/
+# Local proprietary platform bundle and configuration; never part of the project source.
+/zetaris-platform/
 

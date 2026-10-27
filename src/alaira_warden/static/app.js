@@ -169,8 +169,10 @@ function activityCard(group) {
     return `<section class="activity-task"><h4>${escapeHTML(AGENT_STAGE_LABELS[task.latest.stage] || task.latest.stage || "Investigation")}</h4><span class="activity-task-context">${escapeHTML(context)}</span><ol>${steps}</ol></section>`;
   }).join("");
   const taskCount = group.tasks?.length || 1;
+  const scopedTasks = (group.tasks || [group]).every((task) => task.latest.run_id || task.latest.investigation_id);
+  const historyLabel = scopedTasks ? `${taskCount} ${taskCount === 1 ? "task" : "tasks"} · ${group.events.length} recorded events` : `${group.events.length} recorded events`;
 
-  return `<li class="activity-item"><details class="activity-agent"><summary class="activity-row">${agentAvatar(event.agent, true)}<span class="activity-identity"><strong>${escapeHTML(agent?.name || event.agent || "Agent")}${synthetic ? '<span class="activity-sample">Sample</span>' : ""}</strong><span class="activity-stage">${escapeHTML(stage)} · ${taskCount} ${taskCount === 1 ? "task" : "tasks"}</span><span class="activity-preview">${escapeHTML(event.summary || "No summary recorded.")}</span></span><span class="activity-meta"><span class="activity-status activity-status-${tone}">${escapeHTML(label)}</span>${activityTime(event.created_at)}</span><span class="activity-chevron" aria-hidden="true">›</span></summary><div class="activity-history"><div class="activity-history-heading"><span>${taskCount} ${taskCount === 1 ? "task" : "tasks"} · ${group.events.length} recorded events</span>${duration ? `<span class="activity-duration">${duration}</span>` : ""}</div>${caseLink}${taskHistory}</div></details></li>`;
+  return `<li class="activity-item"><details class="activity-agent" data-agent="${escapeHTML(event.agent || "unknown")}"><summary class="activity-row">${agentAvatar(event.agent, true)}<span class="activity-identity"><strong>${escapeHTML(agent?.name || event.agent || "Agent")}${synthetic ? '<span class="activity-sample">Sample</span>' : ""}</strong><span class="activity-stage">${escapeHTML(stage)}</span><span class="activity-preview">${escapeHTML(event.summary || "No summary recorded.")}</span></span><span class="activity-meta"><span class="activity-status activity-status-${tone}">${escapeHTML(label)}</span>${activityTime(event.created_at)}</span><span class="activity-chevron" aria-hidden="true">›</span></summary><div class="activity-history"><div class="activity-history-heading"><span>${historyLabel}</span>${duration ? `<span class="activity-duration">${duration}</span>` : ""}</div>${caseLink}${taskHistory}</div></details></li>`;
 
 }
 function groupActivityByAgent(events) {
@@ -187,8 +189,8 @@ function groupActivityByAgent(events) {
 function agentTimeline(events) {
   if (!events?.length) return empty("No agent activity yet", "Start an investigation to see evidence collection, decisions, and handoffs here.", "layers", state.authenticated ? "" : button("Connect environment", "connect", "plug", true));
   const agents = groupActivityByAgent(events);
-  const tasks = agents.reduce((count, agent) => count + agent.tasks.length, 0);
-  return `<div class="activity-overview"><span>${agents.length} ${agents.length === 1 ? "agent" : "agents"} · ${tasks} ${tasks === 1 ? "task" : "tasks"}</span><span>Most recent</span></div><ol class="activity-timeline" aria-label="One entry per agent, latest activity first">${agents.map(activityCard).join("")}</ol>`;
+  const eventCount = agents.reduce((count, agent) => count + agent.events.length, 0);
+  return `<div class="activity-overview"><span>${agents.length} ${agents.length === 1 ? "agent" : "agents"} · ${eventCount} events</span><span>Most recent</span></div><ol class="activity-timeline" aria-label="One entry per agent, latest activity first">${agents.map(activityCard).join("")}</ol>`;
 }
 
 function panorama() {
@@ -309,7 +311,12 @@ function render() {
   const current = route();
   renderNavigation(); renderChrome();
   const views = { overview, agents: agentsPage, applications: () => applicationsPage(current.id, current.tab), integrations: integrationsPage, settings: settingsPage };
-  $("view").innerHTML = views[current.page]();
+  const view = $("view");
+  const expandedAgents = new Set([...(view.querySelectorAll?.("details.activity-agent[open]") || [])].map((entry) => entry.dataset.agent));
+  view.innerHTML = views[current.page]();
+  for (const entry of view.querySelectorAll?.("details.activity-agent") || []) {
+    if (expandedAgents.has(entry.dataset.agent)) entry.open = true;
+  }
   $("view").setAttribute("aria-busy", String(state.loading));
 }
 

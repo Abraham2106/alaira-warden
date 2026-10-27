@@ -20,7 +20,9 @@ from alaira_warden.identity import (
     enforce_platform,
 )
 from alaira_warden.integration.auth import Actor
+from alaira_warden.integration.product_actions import ProductActions
 from alaira_warden.integration.services import ProductServices
+from alaira_warden.intelligence import SourceError
 from alaira_warden.inventory import InventoryError, KnownSnapshot, import_deployments
 from alaira_warden.nightshift import deployment_verified
 from alaira_warden.orchestration.runtime import RunBusy, RunRequest
@@ -36,6 +38,11 @@ class Refresh(BaseModel):
     ref: str = Field(default="HEAD", min_length=1, max_length=255)
 
 
+class DependabotImport(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    alert_number: int = Field(ge=1, strict=True)
+
+
 class Analysis(BaseModel):
     model_config = ConfigDict(extra="forbid")
     snapshot_id: UUID
@@ -43,6 +50,22 @@ class Analysis(BaseModel):
         pattern=r"^(CVE-[0-9]{4}-[0-9]{4,}|GHSA-[23456789cfghjmpqrvwx]{4}-[23456789cfghjmpqrvwx]{4}-[23456789cfghjmpqrvwx]{4})$"
     )
     request_key: UUID
+
+
+class RemediationBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    snapshot_id: UUID
+    request_key: UUID
+    package: str = Field(pattern=r"^(?:@[a-z0-9_.-]+/)?[a-z0-9_.-]+$", max_length=200)
+    versions: list[str] = Field(min_length=1, max_length=3)
+    max_attempts: int = Field(default=2, ge=1, le=3)
+
+
+class ArtifactApprovalBody(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    base: str = Field(default="main", min_length=1, max_length=200)
+    justification: str = Field(min_length=10, max_length=2000)
+    decision: Literal["approved", "rejected"] = "approved"
 
 
 class Review(BaseModel):
@@ -94,6 +117,104 @@ def create_product_router(get_repository):
             raise HTTPException(404, "Not found.")
         application(store, principal, row["application_id"], action)
         return row
+
+    @router.post("/applications/{identifier}/dependabot/import")
+    def dependabot_import(
+        identifier: UUID,
+        payload: DependabotImport,
+        store: Store,
+        principal: Actor,
+        services: Services,
+    ):
+        row = application(store, principal, identifier, "investigation.create")
+        try:
+            return services.import_dependabot(row, payload.alert_number, audit_actor(principal))
+        except SourceError as error:
+            raise HTTPException(
+                502,
+                {
+                    "source": "dependabot",
+                    "category": error.category,
+                    "detail": "Dependabot read failed; no safety conclusion was made.",
+                },
+            ) from None
+
+    def action_error(error):
+        if isinstance(error, PermissionError):
+            raise HTTPException(403, "Action is not authorized.") from None
+        raise HTTPException(
+            409,
+            str(error)
+            if isinstance(error, ValueError)
+            else "Operation failed; retry will reconcile existing work.",
+        ) from None
+
+    @router.post("/investigations/{identifier}/remediation")
+    def remediation(identifier: UUID, payload: RemediationBody, store: Store, principal: Actor):
+        row = case(store, principal, identifier, "patch.prepare")
+        if row["status"] in {"closed", "cancelled"}:
+            raise HTTPException(409, "Closed cases cannot execute corrections.")
+        app = store.application(row["application_id"])
+        try:
+            return ProductActions(store.settings).execute(row, app, payload, principal)
+        except (ValueError, PermissionError, RuntimeError) as error:
+            action_error(error)
+
+    @router.get("/investigations/{identifier}/remediation/{job_id}")
+    def remediation_status(identifier: UUID, job_id: UUID, store: Store, principal: Actor):
+        case(store, principal, identifier, "investigation.read")
+        try:
+            return ProductActions.public_job(ProductActions(store.settings).job(identifier, job_id))
+        except ValueError as error:
+            action_error(error)
+
+    @router.post("/investigations/{identifier}/remediation/{job_id}/cancel")
+    def remediation_cancel(identifier: UUID, job_id: UUID, store: Store, principal: Actor):
+        row = case(store, principal, identifier, "patch.prepare")
+        try:
+            return ProductActions(store.settings).cancel(
+                row,
+                store.application(row["application_id"]),
+                job_id,
+                principal,
+            )
+        except (ValueError, PermissionError) as error:
+            action_error(error)
+
+    @router.post("/investigations/{identifier}/remediation/{job_id}/approve")
+    def artifact_approval(
+        identifier: UUID,
+        job_id: UUID,
+        payload: ArtifactApprovalBody,
+        store: Store,
+        principal: Actor,
+    ):
+        row = case(store, principal, identifier, "approval.decide")
+        try:
+            return ProductActions(store.settings).review(
+                row,
+                store.application(row["application_id"]),
+                job_id,
+                payload,
+                principal,
+            )
+        except (ValueError, PermissionError) as error:
+            action_error(error)
+
+    @router.post("/investigations/{identifier}/remediation/{job_id}/publish")
+    def artifact_publish(identifier: UUID, job_id: UUID, store: Store, principal: Actor):
+        row = case(store, principal, identifier, "pull_request.publish")
+        if row["status"] in {"closed", "cancelled"}:
+            raise HTTPException(409, "Closed cases cannot publish changes.")
+        try:
+            return ProductActions(store.settings).publish(
+                row,
+                store.application(row["application_id"]),
+                job_id,
+                principal,
+            )
+        except (ValueError, PermissionError, RuntimeError) as error:
+            action_error(error)
 
     @router.get("/applications/{identifier}/inventory")
     def inventory(identifier: UUID, store: Store, principal: Actor):
@@ -185,6 +306,22 @@ def create_product_router(get_repository):
                 "AND s.stage LIKE 'consultation%%' ORDER BY s.created_at DESC LIMIT 20",
                 (identifier,),
             ).fetchall()
+            histories = connection.execute(
+                "SELECT s.run_id,s.payload,s.created_at FROM workflow_stage_results s "
+                "JOIN workflow_runs w ON w.id=s.run_id WHERE w.investigation_id=%s "
+                "AND s.stage LIKE 'history:%%' ORDER BY s.created_at DESC LIMIT 50",
+                (identifier,),
+            ).fetchall()
+            jobs = connection.execute(
+                "SELECT id,status,payload,created_at FROM product_jobs "
+                "WHERE investigation_id=%s ORDER BY created_at DESC LIMIT 20",
+                (identifier,),
+            ).fetchall()
+            publications = connection.execute(
+                "SELECT p.payload,p.created_at FROM product_publications p JOIN product_jobs j "
+                "ON j.id=p.job_id WHERE j.investigation_id=%s ORDER BY p.created_at DESC LIMIT 20",
+                (identifier,),
+            ).fetchall()
             critiques = connection.execute(
                 "SELECT s.run_id,s.payload,s.created_at FROM workflow_stage_results s "
                 "JOIN workflow_runs w ON w.id=s.run_id WHERE w.investigation_id=%s "
@@ -229,6 +366,9 @@ def create_product_router(get_repository):
             "runs": runs,
             "consultations": consultations,
             "critiques": critiques,
+            "histories": histories,
+            "remediations": jobs,
+            "publications": publications,
             "plans": plans,
             "patches": patches,
             "validations": validations,
@@ -253,6 +393,8 @@ def create_product_router(get_repository):
         identifier: UUID, payload: Analysis, store: Store, principal: Actor, services: Services
     ):
         row = case(store, principal, identifier, "investigation.review")
+        if row["status"] in {"closed", "cancelled"}:
+            raise HTTPException(409, "Closed cases cannot start a run.")
         with connect(store.settings) as connection:
             snapshot = connection.execute(
                 "SELECT id FROM inventory_snapshots WHERE id=%s AND application_id=%s",
@@ -291,6 +433,8 @@ def create_product_router(get_repository):
     @router.post("/investigations/{identifier}/runs/{run_id}/advance")
     def advance(identifier: UUID, run_id: UUID, store: Store, principal: Actor, services: Services):
         row = case(store, principal, identifier, "investigation.review")
+        if row["status"] in {"closed", "cancelled"}:
+            raise HTTPException(409, "Closed cases cannot advance a run.")
         with connect(store.settings) as connection:
             found = connection.execute(
                 "SELECT id FROM workflow_runs WHERE id=%s AND investigation_id=%s",
@@ -347,7 +491,8 @@ def create_product_router(get_repository):
                 else "investigating"
             )
             connection.execute(
-                "UPDATE investigations SET status=%s,exposure=%s WHERE id=%s",
+                "UPDATE investigations SET status=%s,exposure=%s WHERE id=%s "
+                "AND status NOT IN ('closed','cancelled')",
                 (case_status, exposure, identifier),
             )
             services.audit(connection, identifier, audit_actor(principal), "workflow.dispatched")
@@ -384,7 +529,9 @@ def create_product_router(get_repository):
 
     @router.post("/investigations/{identifier}/evidence/{revision}/review", status_code=201)
     def review(identifier: UUID, revision: UUID, payload: Review, store: Store, principal: Actor):
-        case(store, principal, identifier, "investigation.review")
+        current_case = case(store, principal, identifier, "investigation.review")
+        if current_case["status"] in {"closed", "cancelled"}:
+            raise HTTPException(409, "Closed cases cannot advance a run.")
         review_id = uuid4()
         with connect(store.settings) as connection:
             if not connection.execute(
@@ -598,13 +745,18 @@ def create_product_router(get_repository):
         principal: Actor,
         services: Services,
     ):
-        case(store, principal, identifier, "investigation.read")
+        row = case(store, principal, identifier, "investigation.read")
         options = {"topN": payload.top_n}
         if payload.threshold is not None:
             options["threshold"] = payload.threshold
         with connect(store.settings) as connection:
             services._load_memory(connection)
-            result = services.memory.recall(payload.query, options)
+            authorized_cases = connection.execute(
+                "SELECT id FROM investigations WHERE application_id=%s", (row["application_id"],)
+            ).fetchall()
+            result = services.memory.recall_for_cases(
+                payload.query, [str(item["id"]) for item in authorized_cases], options
+            )
             services.memory.save_recall(connection, identifier, None, result)
             services._save_memory(connection)
         return result
@@ -617,6 +769,7 @@ def create_product_router(get_repository):
         principal: Actor,
         services: Services,
     ):
+        enforce_platform(principal, "settings.manage")
         case(store, principal, identifier, "investigation.review")
         with connect(store.settings) as connection:
             services._load_memory(connection)
@@ -639,6 +792,7 @@ def create_product_router(get_repository):
         principal: Actor,
         services: Services,
     ):
+        enforce_platform(principal, "settings.manage")
         case(store, principal, identifier, "investigation.review")
         with connect(store.settings) as connection:
             services._load_memory(connection)
@@ -654,6 +808,7 @@ def create_product_router(get_repository):
 
     @router.post("/investigations/{identifier}/memory/dream")
     def memory_dream(identifier: UUID, store: Store, principal: Actor, services: Services):
+        enforce_platform(principal, "settings.manage")
         case(store, principal, identifier, "investigation.review")
         with connect(store.settings) as connection:
             services._load_memory(connection)
@@ -670,6 +825,7 @@ def create_product_router(get_repository):
         principal: Actor,
         services: Services,
     ):
+        enforce_platform(principal, "settings.manage")
         case(store, principal, identifier, "investigation.review")
         with connect(store.settings) as connection:
             services._load_memory(connection)
@@ -694,6 +850,7 @@ def create_product_router(get_repository):
 
     @router.post("/investigations/{identifier}/memory/conflicts/scan")
     def memory_conflicts(identifier: UUID, store: Store, principal: Actor, services: Services):
+        enforce_platform(principal, "settings.manage")
         case(store, principal, identifier, "investigation.review")
         with connect(store.settings) as connection:
             services._load_memory(connection)
@@ -713,6 +870,7 @@ def create_product_router(get_repository):
     def memory_ledger(
         identifier: UUID, memory_id: str, store: Store, principal: Actor, services: Services
     ):
+        enforce_platform(principal, "settings.manage")
         case(store, principal, identifier, "investigation.read")
         with connect(store.settings) as connection:
             services._load_memory(connection)

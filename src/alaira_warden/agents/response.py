@@ -264,6 +264,24 @@ def close_case(settings, *, investigation_id, actor: str, outcome: str, justific
     status = "cancelled" if outcome == "cancelled" else "closed"
     identifier = uuid4()
     with connect(settings) as connection:
+        if not connection.execute(
+            "SELECT pg_try_advisory_xact_lock(hashtextextended(%s,0)) AS ok",
+            (f"productcase:{investigation_id}",),
+        ).fetchone()["ok"]:
+            raise ValueError(
+                "Correction or publication is active; cancel it before closing the case"
+            )
+
+        if (
+            outcome == "not_affected"
+            and connection.execute(
+                "SELECT 1 FROM workflow_stage_results s JOIN workflow_runs w ON w.id=s.run_id "
+                "WHERE w.investigation_id=%s AND s.stage LIKE 'history:%%' "
+                "AND s.payload->>'follow_up' IN ('required','review_required') LIMIT 1",
+                (investigation_id,),
+            ).fetchone()
+        ):
+            raise ValueError("Historical exposure still requires follow-up")
         connection.execute(
             "INSERT INTO investigation_closures"
             "(id,investigation_id,outcome,actor,justification) VALUES (%s,%s,%s,%s,%s)",
@@ -287,6 +305,22 @@ def close_case(settings, *, investigation_id, actor: str, outcome: str, justific
 
 def report(settings, investigation_id) -> dict:
     with connect(settings) as connection:
+        histories = connection.execute(
+            "SELECT s.run_id,s.payload FROM workflow_stage_results s JOIN workflow_runs w "
+            "ON w.id=s.run_id WHERE w.investigation_id=%s AND s.stage LIKE 'history:%%' "
+            "ORDER BY s.created_at DESC LIMIT 50",
+            (investigation_id,),
+        ).fetchall()
+        jobs = connection.execute(
+            "SELECT id,status,payload FROM product_jobs WHERE investigation_id=%s "
+            "ORDER BY created_at DESC LIMIT 20",
+            (investigation_id,),
+        ).fetchall()
+        publications = connection.execute(
+            "SELECT p.payload FROM product_publications p JOIN product_jobs j ON j.id=p.job_id "
+            "WHERE j.investigation_id=%s ORDER BY p.created_at DESC LIMIT 20",
+            (investigation_id,),
+        ).fetchall()
         case = connection.execute(
             "SELECT * FROM investigations WHERE id=%s", (investigation_id,)
         ).fetchone()
@@ -322,6 +356,9 @@ def report(settings, investigation_id) -> dict:
         ).fetchall()
         events = traces.for_case(settings, investigation_id)
     body = {
+        "historical_exposure": histories,
+        "remediations": jobs,
+        "publications": publications,
         "investigation": traces.public_row(case) if case else None,
         "methodology": [
             "Deterministic npm range comparison",

@@ -1,0 +1,7 @@
+# Operator-built demonstration image: no repository scripts execute during cache provisioning.
+# Resolve this build to an immutable local image ID before constructing ExecutionPolicy.
+FROM node:22-bookworm-slim
+RUN npm cache add lodash@4.17.20 --cache=/opt/npm-cache \
+    && npm cache add lodash@4.17.21 --cache=/opt/npm-cache \
+    && chmod -R a+rX /opt/npm-cache
+USER 10001:10001

@@ -39,7 +39,11 @@ def deployment_verified(result: ModelResult, requested_model: str) -> bool:
     them to a cloud Nemotron id. That is still Nightshift, not NVIDIA-direct.
     """
     return bool(
-        requested_model.strip() and result.provider == "meterless" and str(result.model).strip()
+        requested_model.strip()
+        and result.provider == "meterless"
+        and str(result.model).strip()
+        and "mock" not in result.model.lower()
+        and not any("synthetic_mock" in warning for warning in result.warnings)
     )
 
 

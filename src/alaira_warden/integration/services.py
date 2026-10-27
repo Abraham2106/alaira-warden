@@ -7,6 +7,7 @@ from psycopg.types.json import Jsonb
 from alaira_warden.agents import traces
 from alaira_warden.config import Settings
 from alaira_warden.correlation.engine import evaluate_snapshot
+from alaira_warden.correlation.history import evaluate_deployment_history
 from alaira_warden.correlation.models import Context
 from alaira_warden.db import connect
 from alaira_warden.hmem import HMEM, InvestigationMemory
@@ -26,6 +27,7 @@ from alaira_warden.intelligence import (
     group_advisories,
     persist_records,
 )
+from alaira_warden.intelligence.dependabot import fetch_dependabot_alert
 from alaira_warden.intelligence.http import HttpRequest
 from alaira_warden.inventory import (
     AuthorizedApplication,
@@ -34,6 +36,7 @@ from alaira_warden.inventory import (
     snapshot_from_github,
 )
 from alaira_warden.inventory.github_read import HTTPResponse
+from alaira_warden.inventory.models import DeploymentRecord
 from alaira_warden.orchestration.runtime import StageContext, StageOutput, WorkflowRuntime
 from alaira_warden.providers.errors import ProviderError
 
@@ -99,6 +102,68 @@ class ProductServices:
             identifier = insert_snapshot(connection, result, actor=actor)
             self.audit(connection, application["id"], actor, "github.inventory_read")
         return {"id": identifier, **result.model_dump(mode="json")}
+
+    def import_dependabot(self, application: dict, number: int, actor: str):
+        record = fetch_dependabot_alert(
+            application["repository"],
+            number,
+            token=self.settings.warden_github_token.get_secret_value(),
+            transport=self.transport,
+        )
+        with connect(self.settings) as connection:
+            # Serialize repeated imports for this application, including concurrent requests.
+            connection.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended(%s,0))",
+                (f"dependabot:{application['id']}",),
+            )
+            persist_records(connection, [record])
+            revision = connection.execute(
+                "SELECT r.id FROM advisory_revisions r JOIN advisories a ON a.id=r.advisory_id "
+                "WHERE a.source='github' AND a.source_identifier=%s AND r.content_hash=%s",
+                (record.source_id, record.content_hash),
+            ).fetchone()["id"]
+            row = connection.execute(
+                "SELECT * FROM investigations WHERE application_id=%s AND source_url=%s "
+                "ORDER BY created_at,id LIMIT 1",
+                (application["id"], record.source_url),
+            ).fetchone()
+            created = row is None
+            if created:
+                row = connection.execute(
+                    "INSERT INTO investigations(id,application_id,title,source_url,description) "
+                    "VALUES (%s,%s,%s,%s,%s) RETURNING *",
+                    (
+                        uuid4(),
+                        application["id"],
+                        record.title or "Dependabot alert",
+                        record.source_url,
+                        record.summary or "Dependabot intake; exposure unverified.",
+                    ),
+                ).fetchone()
+            if not connection.execute(
+                "SELECT id FROM evidence WHERE investigation_id=%s AND advisory_revision_id=%s",
+                (row["id"], revision),
+            ).fetchone():
+                connection.execute(
+                    "INSERT INTO evidence(id,investigation_id,advisory_revision_id,source_url,"
+                    "content_hash,excerpt,confidence) VALUES (%s,%s,%s,%s,%s,%s,'preliminary')",
+                    (
+                        uuid4(),
+                        row["id"],
+                        revision,
+                        record.source_url,
+                        record.content_hash,
+                        (record.summary or "")[:4000],
+                    ),
+                )
+            self.audit(connection, row["id"], actor, "dependabot.imported")
+        return {
+            "investigation": row,
+            "created": created,
+            "advisory_identifier": record.aliases[0],
+            "alert_state": record.origin["state"],
+            "warnings": record.warnings,
+        }
 
     @staticmethod
     def audit(connection, identifier, actor, action):
@@ -230,10 +295,20 @@ class ProductServices:
             )
             fetch(fetch_kev_catalog)
         relevant = {identifier, *cves}
+        with connect(self.settings) as connection:
+            imported = connection.execute(
+                "SELECT r.payload FROM evidence e JOIN advisory_revisions r "
+                "ON r.id=e.advisory_revision_id WHERE e.investigation_id=%s "
+                "AND r.payload->'origin'->>'provider'='dependabot' "
+                "ORDER BY r.retrieved_at DESC LIMIT 100",
+                (context.investigation_id,),
+            ).fetchall()
         records = [
             record
-            for batch in batches
-            for record in batch.records
+            for record in [
+                *[record for batch in batches for record in batch.records],
+                *[SourceRecord.model_validate(row["payload"]) for row in imported],
+            ]
             if relevant.intersection({record.source_id, *record.aliases})
         ]
         if not records:
@@ -325,6 +400,7 @@ class ProductServices:
         if context.data_mode != self.settings.warden_data_mode:
             return StageOutput(status="blocked", reason="unsupported")
         if cached := self.cached(context, "correlation"):
+            self.critique_stage(context, cached.references)
             return cached
         snapshot_id = context.references["inventory"][0]
         with connect(self.settings) as connection:
@@ -335,7 +411,13 @@ class ProductServices:
             snapshot = convert.snapshot(row, components)
             self._load_memory(connection)
             packages = " ".join(dict.fromkeys(item.name for item in snapshot.components))
-            recall = self.memory.recall(f"{context.advisory_identifier} {packages}".strip())
+            authorized_cases = connection.execute(
+                "SELECT id FROM investigations WHERE application_id=%s", (context.application_id,)
+            ).fetchall()
+            recall = self.memory.recall_for_cases(
+                f"{context.advisory_identifier} {packages}".strip(),
+                [str(item["id"]) for item in authorized_cases],
+            )
             self.memory.save_recall(connection, context.investigation_id, context.run_id, recall)
             self.narrate(
                 context,
@@ -368,6 +450,55 @@ class ProductServices:
                         asset_criticality=app["criticality"] or "medium",
                     ),
                 )
+                deployment_rows = connection.execute(
+                    "SELECT application_id,environment,artifact_ref,commit_sha,snapshot_id,"
+                    "deployed_at,retired_at,source_reference FROM deployments "
+                    "WHERE application_id=%s ORDER BY deployed_at DESC LIMIT 1001",
+                    (context.application_id,),
+                ).fetchall()
+                deployments = [DeploymentRecord.model_validate(item) for item in deployment_rows]
+                historical = []
+                for candidate in connection.execute(
+                    "SELECT DISTINCT s.id FROM inventory_snapshots s JOIN deployments d "
+                    "ON d.application_id=s.application_id AND (d.snapshot_id=s.id OR "
+                    "(d.snapshot_id IS NULL AND d.commit_sha=s.commit_ref)) "
+                    "WHERE s.application_id=%s LIMIT 1001",
+                    (context.application_id,),
+                ).fetchall():
+                    hrow, hcomponents = data.snapshot(
+                        connection, candidate["id"], context.application_id
+                    )
+                    historical.append(convert.snapshot(hrow, hcomponents))
+                history = evaluate_deployment_history(
+                    snapshot,
+                    advisory,
+                    deployments,
+                    historical,
+                    asset_criticality=app["criticality"] or "medium",
+                )
+                connection.execute(
+                    "INSERT INTO workflow_stage_results(run_id,stage,payload) VALUES (%s,%s,%s) "
+                    "ON CONFLICT DO NOTHING",
+                    (context.run_id, f"history:{revision}", Jsonb(history.model_dump(mode="json"))),
+                )
+                for observation in history.deployments:
+                    if observation.assessment is not None:
+                        historical_assessment = observation.assessment
+                        connection.execute(
+                            "INSERT INTO assessments(id,investigation_id,snapshot_id,"
+                            "advisory_revision_id,payload,data_layer,data_sources,review_id) "
+                            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
+                            (
+                                uuid4(),
+                                context.investigation_id,
+                                historical_assessment.snapshot_id,
+                                revision,
+                                Jsonb(historical_assessment.model_dump(mode="json")),
+                                data.mode,
+                                Jsonb(list(data.sources)),
+                                review["id"] if review else None,
+                            ),
+                        )
                 assessment_id = uuid4()
                 connection.execute(
                     "INSERT INTO assessments(id,investigation_id,snapshot_id,advisory_revision_id,"
@@ -409,12 +540,6 @@ class ProductServices:
                     context.advisory_identifier,
                     str(revision),
                 )
-            try:
-                found = self.hmem.conflicts.scan()
-                for conflict in found:
-                    self.hmem.conflicts.auto_resolve(conflict)
-            except Exception:
-                pass
             self._save_memory(connection)
             self.narrate(
                 context,
@@ -423,26 +548,77 @@ class ProductServices:
                 "Deterministic exposure recorded. The model does not assign it.",
                 assessments=len(identifiers),
             )
-            critique = run_planner_evaluator(
-                self.settings, assessment_ids=identifiers, client=self.meterless
+            output = StageOutput(status="ready", references=tuple(identifiers))
+            self.save_stage(connection, context, "correlation", output)
+            self.audit(
+                connection, context.investigation_id, context.subject_id, "correlation.evaluated"
             )
+        self.critique_stage(context, identifiers)
+        return output
+
+    def critique_stage(self, context, identifiers):
+        """Assessments commit first; each model reservation commits independently."""
+        with connect(self.settings) as connection:
+            if connection.execute(
+                "SELECT 1 FROM workflow_stage_results WHERE run_id=%s AND stage='critique'",
+                (context.run_id,),
+            ).fetchone():
+                return
+            rows = connection.execute(
+                "SELECT id,payload FROM assessments WHERE investigation_id=%s "
+                "AND id=ANY(%s::uuid[]) ORDER BY id",
+                (context.investigation_id, list(identifiers)),
+            ).fetchall()
+            saved = connection.execute(
+                "SELECT payload FROM workflow_stage_results WHERE run_id=%s "
+                "AND stage LIKE 'critique_state:%%' ORDER BY created_at DESC,stage DESC LIMIT 1",
+                (context.run_id,),
+            ).fetchone()
+        facts = [
+            {
+                "id": str(row["id"]),
+                "exposure": row["payload"].get("exposure"),
+                "findings": [
+                    {
+                        "package": finding.get("package_name"),
+                        "version": finding.get("resolved_version"),
+                        "reasons": finding.get("reasons", [])[:3],
+                    }
+                    for finding in row["payload"].get("findings", [])[:4]
+                ],
+            }
+            for row in rows[:6]
+        ]
+
+        def checkpoint(payload):
+            with connect(self.settings) as connection:
+                connection.execute(
+                    "INSERT INTO workflow_stage_results(run_id,stage,payload) VALUES (%s,%s,%s)",
+                    (context.run_id, f"critique_state:{time.time_ns()}", Jsonb(payload)),
+                )
+
+        critique = run_planner_evaluator(
+            self.settings,
+            assessment_ids=identifiers,
+            client=self.meterless,
+            context={"assessments": facts},
+            state=saved["payload"] if saved else None,
+            checkpoint=checkpoint,
+            cancelled=context.cancelled,
+            deadline=context.deadline,
+        )
+        with connect(self.settings) as connection:
             connection.execute(
                 "INSERT INTO workflow_stage_results(run_id,stage,payload) "
                 "VALUES (%s,'critique',%s) "
                 "ON CONFLICT DO NOTHING",
                 (context.run_id, Jsonb(critique)),
             )
-            self.narrate(
-                context,
-                "evaluator",
-                "skipped" if critique.get("status") == "skipped" else "decided",
-                "Critique fail-open. Exposure did not change.",
-                critique_status=critique.get("status"),
-                changed_exposure=False,
-            )
-            output = StageOutput(status="ready", references=tuple(identifiers))
-            self.save_stage(connection, context, "correlation", output)
-            self.audit(
-                connection, context.investigation_id, context.subject_id, "correlation.evaluated"
-            )
-        return output
+        self.narrate(
+            context,
+            "evaluator",
+            "decided" if critique.get("status") == "ready" else "blocked",
+            "Plan review recorded. Deterministic exposure is unchanged.",
+            critique_status=critique.get("status"),
+            changed_exposure=False,
+        )

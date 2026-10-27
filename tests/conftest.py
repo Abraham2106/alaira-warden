@@ -48,6 +48,7 @@ def product(monkeypatch):
         "integration.auth",
         "integration.routes",
         "integration.services",
+        "integration.product_actions",
         "orchestration.runtime",
         "agents.traces",
         "agents.response",

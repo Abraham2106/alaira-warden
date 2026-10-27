@@ -533,7 +533,13 @@ def test_planner_evaluator_is_fail_open_and_never_changes_exposure(product):
         def generate_text(self, **kwargs):
             calls.append(kwargs)
             return ModelResult(
-                provider="meterless", model="meterless/auto", text="Do not change exposure."
+                provider="meterless",
+                model="meterless/auto",
+                text=json.dumps(
+                    {"steps": ["Read cited evidence"], "uncertainties": []}
+                    if len(calls) == 1
+                    else {"decision": "accept", "feedback": "Plan keeps exposure unchanged."}
+                ),
             )
 
     configured = product["settings"].model_copy(

@@ -183,6 +183,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "no-referrer"
         if request.url.path == "/" or request.url.path.startswith("/static/"):
+            if request.url.path == "/" or request.url.path.endswith((".js", ".css", ".html")):
+                response.headers["Cache-Control"] = "no-cache"
             avatar_styles = AVATAR_STYLE_HASHES.get(request.url.path, "")
             response.headers["Content-Security-Policy"] = (
                 f"default-src 'self'; script-src 'self'; style-src 'self' {avatar_styles}; "

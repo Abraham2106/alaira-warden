@@ -81,9 +81,14 @@ class MemoryRetrievalService:
         threshold = options.get("threshold", DEFAULTS["retrievalThreshold"])
         top_n = options.get("topN", DEFAULTS["retrievalTopN"])
         chat_id = options.get("chatId")
+        allowed_chat_ids = options.get("allowedChatIds")
+        if allowed_chat_ids is not None:
+            allowed_chat_ids = frozenset(str(item) for item in allowed_chat_ids)
 
         scored: list[RetrievedMemory] = []
         for memory in self._store.all():
+            if allowed_chat_ids is not None and memory.chatId not in allowed_chat_ids:
+                continue
             if chat_id and memory.chatId and memory.chatId != chat_id:
                 continue
             relevance = self._score(

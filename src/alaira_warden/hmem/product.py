@@ -77,6 +77,10 @@ class InvestigationMemory:
         payload["available"] = True
         return payload
 
+    def recall_for_cases(self, query: str, investigation_ids, opts: dict | None = None) -> dict:
+        """Caller supplies server-authorized case ids; unscoped memories stay excluded."""
+        return self.recall(query, {**(opts or {}), "allowedChatIds": list(investigation_ids)})
+
     def remember_source(self, record, investigation_id: UUID, advisory: str) -> None:
         packages = ", ".join(
             f"{item.package_name}@{item.ecosystem}" for item in record.affected if item.package_name

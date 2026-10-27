@@ -1,0 +1,18 @@
+FROM anchore/syft:v1.55.0 AS syft
+FROM aquasec/trivy:0.76.1 AS trivy
+FROM ghcr.io/google/osv-scanner:v2.7.0 AS osv
+FROM alaira-warden-npm-tools
+USER root
+COPY --from=syft /syft /usr/local/bin/syft
+COPY --from=trivy /usr/local/bin/trivy /usr/local/bin/trivy
+COPY --from=trivy /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+COPY --from=osv /osv-scanner /usr/local/bin/osv-scanner
+# Database provisioning happens before untrusted project input is introduced.
+RUN trivy image --download-db-only --cache-dir /opt/trivy-cache \
+    && chmod -R a+rX /opt/trivy-cache
+ADD https://osv-vulnerabilities.storage.googleapis.com/npm/all.zip /opt/osv-cache/osv-scanner/npm/all.zip
+RUN mkdir -p /opt/osv-cache/osv-scalibr \
+    && ln -s ../osv-scanner/npm /opt/osv-cache/osv-scalibr/npm \
+    && chmod -R a+rX /opt/osv-cache
+RUN npm cache add lodash@4.18.1 --cache=/opt/npm-cache && chmod -R a+rX /opt/npm-cache
+USER 10001:10001

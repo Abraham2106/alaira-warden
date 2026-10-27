@@ -41,6 +41,9 @@ class Settings(BaseSettings):
     warden_zetaris_evidence_table: str = ""
     warden_hmem_persist_dir: str = ""
     warden_cursor_api_key: SecretStr = SecretStr("")
+    warden_repository_root: str = "artifacts/repositories"
+    warden_execution_root: str = "artifacts/execution"
+    warden_remediation_image: str = ""
 
     @model_validator(mode="after")
     def map_container_loopback(self):

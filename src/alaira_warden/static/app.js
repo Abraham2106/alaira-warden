@@ -144,10 +144,12 @@ function setupSteps() {
     ["Register an application", "Add the npm repository you want to protect.", apps.length > 0, button("Register application", "new-app", "plus", true)],
     ["Generate inventory", "Resolve the lockfile for a verifiable commit.", apps.some((app) => state.inventory[app.id]?.snapshots?.length), apps[0] ? `<a class="button primary" href="#applications/${escapeHTML(apps[0].id)}/inventory">${icon("refresh")}Open inventory</a>` : ""],
     ["Open an investigation", "Register an advisory and link it to the application.", (state.investigations || []).length > 0, button("New investigation", "new-case", "plus", true)],
-    ["Start a run", "The crew gathers evidence one stage at a time.", false, ""],
+    ["Start a run", "Collect evidence for an investigation.", !!state.context?.runs?.length, button("Open investigation", "open-case-flow")],
   ];
   const next = steps.findIndex(([, , done]) => !done);
-  return `<section class="setup-steps" aria-labelledby="setup-title"><h2 id="setup-title">Get started</h2><ol>${steps.map(([title, sub, done, action], index) => `<li class="${done ? "done" : index === next ? "current" : ""}"${index === next ? ' aria-current="step"' : ""}><span class="setup-mark" aria-hidden="true">${done ? "✓" : index + 1}</span><div><strong>${title}</strong><small>${sub}</small>${done ? '<span class="sr-only">Done.</span>' : ""}${index === next && !state.loading ? action : ""}</div></li>`).join("")}</ol></section>`;
+  const completed = steps.filter(([, , done]) => done).length;
+  return `<section class="setup-steps" aria-labelledby="setup-title"><header class="setup-heading"><h2 id="setup-title">Set up your workspace</h2><span>${completed} of ${steps.length} complete</span></header><ol>${steps.map(([title, sub, done, action], index) => `<li class="${done ? "done" : index === next ? "current" : "upcoming"}"${index === next ? ' aria-current="step"' : ""}><span class="setup-mark" aria-hidden="true">${done ? "✓" : index + 1}</span><div class="setup-step-content"><strong>${title}</strong><small>${sub}</small>${done ? '<span class="sr-only">Done.</span>' : ""}${index === next && !state.loading ? `<div class="setup-action">${action}</div>` : ""}</div></li>`).join("")}</ol></section>`;
+
 }
 function timelineEvents(page = route().page) { return page === "overview" ? (state.activity?.length ? state.activity : (state.context?.agents || [])) : (state.activity || []); }
 function timelineRegion(events) { return `<div id="crew-timeline">${agentTimeline(events)}</div><p id="timeline-status" class="sr-only" aria-live="polite"></p>`; }
@@ -319,7 +321,7 @@ function panorama() {
   const cases = state.investigations;
   const events = timelineEvents("overview");
   const onboarding = !state.authenticated || !state.applications?.length || !cases?.length;
-  return heading("Operations center", "", button("Refresh", "refresh", "refresh") + button("New investigation", "new-case", "plus")) + operationViews() +
+  return heading("Operations center", "", button("Refresh", "refresh", "refresh") + button("New investigation", "new-case", "plus") + button("Import Dependabot", "dependabot-import")) + operationViews() +
     (onboarding ? setupSteps() : `<div class="metrics">${metric("Registered applications", count(state.applications), state.applications ? "In workspace" : "Connect your environment", "apps")}${metric("Investigations", count(cases), cases ? "Advisories recorded" : "No environment data", "cases")}${metric("Confirmed exposure", cases ? String(cases.filter((item) => item.exposure === "confirmed").length) : "—", cases ? "Per deterministic correlation" : '<span class="tiny-dot"></span>No environment data', "check")}${metric("Data layer", state.context?.data_layer === "zetaris" ? "Zetaris" : cases ? "Local" : "—", state.context?.sponsor_data_layer_verified ? "Zetaris read verified" : "Local mode; Zetaris not verified", "layers")}</div>`) +
     `<div class="content-grid"><div>${panel("Crew timeline", timelineRegion(events), `<span id="timeline-count">${badge(events.length ? `${events.length} events` : "No activity")}</span>`, "Warden orchestrates. The Arbiter classifies. Nightshift proposes. Merge is prohibited.")}${panel("Recent investigations", cases?.length ? table(["Investigation", "Status", "Exposure", ""], caseRows(cases.slice(0, 5))) : accessEmpty(), `<a class="text-link" href="#investigations">Open investigations ${icon("arrow")}</a>`)}</div><aside class="overview-aside">${flowPanel()}</aside></div>` +
     `<div class="bottom-sources"><span>Intelligence sources</span>${CATALOG.slice(0, 4).map((item) => `<a href="#integrations" class="source-chip"><span class="source-icon">${connectorIcon(item.id)}</span>${item.name}</a>`).join("")}<a class="text-link" href="#integrations">View integrations ${icon("arrow")}</a></div>`;
@@ -343,6 +345,7 @@ function operationsCase() {
   const rows = state.investigations || [];
   const item = selectedInvestigation();
   const app = item && state.applications?.find((entry) => entry.id === item.application_id);
+  const publication = state.context?.publications?.[0]?.payload;
   const ctx = state.context?.investigation_id && state.context.investigation_id !== item?.id ? null : state.context;
   const sampleNotice = isSampleCase(item) ? note("Synthetic sample", "This case uses controlled data. It does not prove live sponsor integrations or a deployed correction.") : "";
   const evidenceRows = ctx?.evidence || [];
@@ -364,15 +367,18 @@ function operationsCase() {
   const patchPayload = patchRow?.payload || {};
   const validationPayload = validationRow?.payload || {};
   const plan = responseStage("01", "Response plan", "Action, evidence, compatibility, validation, and rollback.", planRow ? `<div class="stage-placeholders"><div><span>Action</span><p>${escapeHTML(planPayload.action || "—")}</p></div><div><span>Packages</span><p>${escapeHTML((planPayload.packages || []).join(", ") || "None")}</p></div><div><span>Rollback</span><p>${escapeHTML(planPayload.rollback || "—")}</p></div></div><p>${escapeHTML(planPayload.justification || "")}</p><p class="inline-pending">${escapeHTML(planPayload.compromise_follow_up || "")}</p>` : `<div class="stage-placeholders"><div><span>Strategy</span><p>No recommendation until exposure is assessed.</p></div><div><span>Compatibility</span><p>No analysis recorded.</p></div><div><span>Rollback</span><p>Will be defined with the proposal.</p></div></div>`, planRow ? String(planPayload.action || "Ready") : "Pending");
-  const patch = responseStage("02", "Proposed change", "Recorded changes and their execution status.", patchRow ? `<div class="diff-scaffold"><div class="diff-file-list">${icon("cases")}<span>${escapeHTML((patchPayload.files || []).join(", ") || "No files")}</span></div><pre class="code-panel">${escapeHTML(patchPayload.diff || patchPayload.note || "")}</pre></div><div class="stage-footer"><span>${escapeHTML(patchPayload.note || "Labeled diff")}</span></div>` : `<div class="diff-scaffold"><div class="diff-file-list">${icon("cases")}<span>No changed files</span></div><div class="diff-empty">${icon("patch")}<span>The diff appears when Patchwright prepares an isolated change.</span></div></div><div class="stage-footer"><span>No pull request recorded</span></div>`, patchRow ? (patchPayload.synthetic ? "Synthetic example" : "Recorded change") : "Not prepared");
+  const patch = responseStage("02", "Proposed change", "Recorded changes and their execution status.", patchRow ? `<div class="diff-scaffold"><div class="diff-file-list">${icon("cases")}<span>${escapeHTML((patchPayload.files || []).map(file=>typeof file === "string" ? file : file.path).join(", ") || "No files")}</span></div><pre class="code-panel">${escapeHTML(patchPayload.diff || patchPayload.note || "")}</pre></div><div class="stage-footer"><span>${escapeHTML(patchPayload.note || "Labeled diff")}</span></div>` : `<div class="diff-scaffold"><div class="diff-file-list">${icon("cases")}<span>No changed files</span></div><div class="diff-empty">${icon("patch")}<span>The diff appears when Patchwright prepares an isolated change.</span></div></div><div class="stage-footer"><span>${publication ? "Pull request published" : "No pull request recorded"}</span></div>`, patchRow ? (patchPayload.synthetic ? "Synthetic example" : "Recorded change") : "Not prepared");
   const validation = responseStage("03", "Validation", "A missing tool does not approve.", `<div class="validation-checks">${(validationPayload.results || [["Functional tests", "Project install and tests"], ["Syft", "Updated inventory"], ["Trivy", "Dependency scan"], ["OSV-Scanner", "Advisory cross-check"]].map(([name, detail]) => ({ tool: name, reason: detail, status: "not_executed" }))).map((row) => `<div><span class="validation-icon">${icon("check")}</span><div><strong>${escapeHTML(row.tool || row[0] || "tool")}</strong><small>${escapeHTML(row.reason || row[1] || "")}</small></div>${badge(row.status === "not_executed" ? "Not executed" : String(row.status || "Pending"))}</div>`).join("")}</div>`, validationPayload.overall || "Pending");
   const approval = responseStage("04", "Review and approval", "A human decision on a specific artifact.", `<div class="approval-summary"><p>${approvalRow ? `${escapeHTML(approvalRow.decision)} · ${escapeHTML(approvalRow.artifact_kind || "plan")}. ${escapeHTML(approvalRow.justification || "")}` : "Review the plan and record your decision with a justification. Approval applies only to the selected artifact."}</p><div class="actions">${button("Close case", "close-case", "", false, !item)}${button("Approve plan", "approve-plan", "approval", true, !planRow)}</div></div>`, approvalRow ? String(approvalRow.decision) : "Pending");
   const runPanel = `<section class="case-block"><div class="case-block-heading"><h3>${icon("layers")}Investigation run</h3>${latestRun ? badge(latestRun.status) : badge("No run", "sand")}</div><div class="case-block-body"><p>${latestRun ? `Stage ${escapeHTML(String(latestRun.stage))} · attempts ${escapeHTML(String(latestRun.attempts))}/${escapeHTML(String(latestRun.max_attempts))}` : "Inventory → sources → correlation. One stage per advance. Critique does not change exposure."}</p><div class="case-actions">${button("Refresh inventory", "refresh-inventory", "refresh", false, !item)}${button("Start run", "start-run", "plus", true, !item)}${button("Advance stage", "advance-run", "arrow", false, !latestRun)}${button("Pause", "pause-run", "clock", false, !latestRun)}${button("Cancel", "cancel-run", "", false, !latestRun)}${button("Compose plan", "compose-plan", "patch", false, !assessments.length)}${button("Synthesis", "synthesis", "signal", false, !assessments.length)}${button("Export report", "export-report", "download", false, !item)}${button("Close case", "close-case", "", false, !item)}</div>${runs.length ? `<ul class="timeline">${runs.slice(0, 4).map((run) => `<li>${escapeHTML(run.status)} · ${escapeHTML(String(run.stage))}<small>${escapeHTML(date(run.updated_at || run.started_at))}</small></li>`).join("")}</ul>` : ""}</div></section>`;
-  const memoryPanel = `<section class="case-block"><div class="case-block-heading"><h3>${icon("info")}H-MEM and critique</h3>${badge(memory?.available ? "Recall" : "No recall", memory?.available ? "green" : "sand")}</div><div class="case-block-body"><p>${escapeHTML((memory?.context || "The engine reinjects prior evidence when recall exists. It does not assign exposure.").slice(0, 400))}</p>${critique ? `<p><strong>Critique ${escapeHTML(critique.status)}</strong> ${escapeHTML((typeof critique.evaluator === "string" ? critique.evaluator : critique.evaluator?.reason || critique.reason || critique.decision || "Review recorded").slice(0, 280))}</p>` : "<p class=\"inline-pending\">Planner/evaluator critique is skipped if Nightshift is not configured.</p>"}</div></section>`;
+  const memoryPanel = `<section class="case-block"><div class="case-block-heading"><h3>${icon("info")}H-MEM and critique</h3>${badge(memory?.available ? "Recall" : "No recall", memory?.available ? "green" : "sand")}</div><div class="case-block-body"><p>${escapeHTML((memory?.context || "The engine reinjects prior evidence when recall exists. It does not assign exposure.").slice(0, 400))}</p>${critique ? `<p><strong>Critique ${escapeHTML(critique.status)}</strong> ${escapeHTML((typeof critique.evaluator === "string" ? critique.evaluator : critique.evaluator?.feedback || critique.reason || critique.decision || "Review recorded").slice(0, 280))}</p>` : "<p class=\"inline-pending\">Planner/evaluator critique is skipped if Nightshift is not configured.</p>"}</div></section>`;
+  const currentJob = ctx?.remediations?.[0];
+  const executionControls = item && !isSampleCase(item) ? `<div class="case-actions">${currentJob?.status === "running" ? button("Cancel correction", "remediation-cancel") : ""}${button("Run correction and scanners", "real-remediation", "patch", false, !planRow || !state.snapshots.length)}${button("Approve validated artifact", "artifact-review", "approval", false, !currentJob?.payload?.validated)}${button("Publish approved PR", "artifact-publish", "arrow", false, !currentJob?.payload?.validated)}</div>` : "";
+  const historicalSummary = (ctx?.histories || []).map((row) => `<div class="module-note"><p><strong>Historical follow-up: ${escapeHTML(row.payload.follow_up)}</strong> ${(row.payload.deployments || []).length} deployment observations. Execution and compromise remain unproven.</p></div>`).join("");
   const history = `<section class="case-block history-block"><div class="case-block-heading"><h3>${icon("clock")}History and traceability</h3>${badge(runs.length ? "Runs" : "Partial query")}</div><div class="case-block-body">${item ? `<ul class="timeline"><li>Advisory recorded<small>${escapeHTML(date(item.created_at))} · persisted record</small></li>${latestRun ? `<li>Last run ${escapeHTML(latestRun.status)}<small>${escapeHTML(date(latestRun.updated_at))}</small></li>` : ""}</ul>` : '<p>Actions will appear here once an investigation exists.</p>'}</div></section>`;
   const actions = item ? `<div class="page-actions">${button("Refresh", "refresh", "refresh")}${button("New investigation", "new-case", "plus", true)}</div>` : button("New investigation", "new-case", "plus", true);
   const crewLog = `<section class="case-block history-block"><div class="case-block-heading"><h3>${icon("layers")}Agent acts</h3>${badge((ctx?.agents || []).length ? String(ctx.agents.length) : "0")}</div><div class="case-block-body">${agentTimeline(ctx?.agents || [])}</div></section>`;
-  return heading("Investigation and response", "", motionControl() + actions) + operationViews() + `<div class="operations-layout">${queue}<article class="case-workspace"><div class="case-workspace-heading"><div><h2>${escapeHTML(item?.title || "Choose an investigation to begin")}</h2></div>${item ? "" : badge("Not selected")}</div>${state.contextError ? note("Investigation details unavailable", state.contextError) : ""}${sampleNotice}${context}<div class="case-intelligence-grid">${evidence}${exposure}</div><div class="case-intelligence-grid">${runPanel}${memoryPanel}</div>${crewLog}<div class="response-flow-heading"><h2>Response flow</h2><span>No pull request recorded</span></div><div class="response-flow">${plan}${patch}${validation}${approval}</div>${history}</article></div>`;
+  return heading("Investigation and response", "", motionControl() + actions) + operationViews() + `<div class="operations-layout">${queue}<article class="case-workspace"><div class="case-workspace-heading"><div><h2>${escapeHTML(item?.title || "Choose an investigation to begin")}</h2></div>${item ? "" : badge("Not selected")}</div>${state.contextError ? note("Investigation details unavailable", state.contextError) : ""}${sampleNotice}${context}<div class="case-intelligence-grid">${evidence}${exposure}</div><div class="case-intelligence-grid">${runPanel}${memoryPanel}</div>${crewLog}<div class="response-flow-heading"><h2>Response flow</h2><span>No pull request recorded</span></div><div class="response-flow">${plan}${patch}${validation}${approval}</div>${executionControls}${publication ? `<p>Pull request: <a href="${escapeHTML(publication.url)}" target="_blank" rel="noopener noreferrer">${escapeHTML(publication.url)}</a></p>` : ""}${historicalSummary}${history}</article></div>`;
 }
 function agentsPage() {
   const crew = state.crew || [];
@@ -453,6 +459,8 @@ function render() {
 function requestTimeout(path, method = "GET") {
   if (/\/(advance|synthesis|inventory\/refresh|memory\/sleep|integrations\/.+\/check|demo\/run|plan|patch|validate)$/.test(path) && method !== "GET") return 120000;
   if (/\/(context|memory|inventory)$/.test(path)) return 20000;
+  if (path.endsWith("/dependabot/import")) return 30000;
+  if (/\/remediation(?:$|\/)/.test(path)) return 1000000;
   return 8000;
 }
 async function api(path, options = {}) {
@@ -558,6 +566,36 @@ async function loadCaseExtras(item, sequence = refreshSequence) {
 function helpDialog() { openModal("About Warden", `<p>Investigate advisories, assess exposure, and review proposed responses in one case. Models propose; evidence and deterministic checks support conclusions.</p>${note("Sample mode", "Creates a labeled synthetic application and investigation in this workspace. It does not contact Nightshift, Zetaris, or NVIDIA, and does not prove those integrations.")}<div class="dialog-actions">${button("Create sample investigation", "sample-run", "signal")}${button("Close", "close-modal", "", true)}</div>`); }
 
 async function performAction(action, target) {
+  if (action === "remediation-cancel") {
+    if (!requireWritable()) return;
+    const item=selectedInvestigation(), job=state.context?.remediations?.[0];
+    if (!item || !job) return;
+    await api(`/api/investigations/${item.id}/remediation/${job.id}/cancel`, {method:"POST"});
+    announce("Correction cancellation requested."); await refreshData(true); return;
+  }
+
+  if (action === "open-case-flow") { state.operationView="case"; navigate("overview"); return; }
+  if (action === "real-remediation") {
+    const item = selectedInvestigation(); if (!item || !requireWritable()) return;
+    openModal("Run validated correction", `<p>Warden will create an isolated change at the selected snapshot and run project tests, Syft, Trivy and OSV-Scanner. Candidate versions must be exact. Nothing is published.</p><form id="remediation-form">${field("remediation-package", "npm package", '<input id="remediation-package" name="package" required maxlength="200">')}${field("remediation-versions", "Candidate versions, comma separated", '<input id="remediation-versions" name="versions" required placeholder="1.2.3">')}${formActions("Run correction")}</form>`); return;
+  }
+  if (action === "artifact-review") {
+    if (!requireWritable()) return;
+    const job = state.context?.remediations?.[0]; if (!job?.payload?.validated) return;
+    openModal("Approve exact artifact", `<p>Commit <code>${escapeHTML(job.payload.proposed_sha)}</code>. All four validations passed. Approval binds this commit and destination.</p><form id="artifact-form" data-job="${escapeHTML(job.id)}">${field("artifact-decision", "Decision", '<select id="artifact-decision" name="decision" required><option value="approved">Approve</option><option value="rejected">Reject</option></select>')}${field("artifact-base", "Destination branch", '<input id="artifact-base" name="base" value="main" required>')}${field("artifact-justification", "Justification", '<textarea id="artifact-justification" name="justification" required minlength="10" maxlength="2000"></textarea>')}${formActions("Approve artifact")}</form>`); return;
+  }
+  if (action === "artifact-publish") {
+    if (!requireWritable()) return;
+    const item = selectedInvestigation(), job = state.context?.remediations?.[0];
+    if (!item || !job) return;
+    const result = await api(`/api/investigations/${item.id}/remediation/${job.id}/publish`, {method:"POST"});
+    announce(`Pull request ${result.number} ready for review.`, "success"); await refreshData(true); return;
+  }
+  if (action === "dependabot-import") {
+    if (!requireWritable()) return;
+    openModal("Import Dependabot alert", `<form id="dependabot-form">${field("dependabot-app", "Application", `<select id="dependabot-app" name="application_id" required>${(state.applications || []).map((app) => `<option value="${escapeHTML(app.id)}">${escapeHTML(app.name)}</option>`).join("")}</select>`)}${field("dependabot-number", "Alert number", '<input id="dependabot-number" name="alert_number" type="number" min="1" required>')}${formActions("Import alert")}</form>`); return;
+  }
+
   if (action === "operation-view") { state.operationView = target.dataset.view; navigate("overview"); return; }
   if (NAV.some((item) => item[0] === action)) { navigate(action); return; }
   if (action === "connect") connectionDialog();
@@ -740,7 +778,7 @@ document.addEventListener("input", (event) => {
 document.addEventListener("invalid", (event) => { event.target.setAttribute("aria-invalid", "true"); }, true);
 document.addEventListener("submit", async (event) => {
   const form = event.target;
-  if (!["connect-form", "application-form", "investigation-form", "close-form", "approval-form"].includes(form.id)) return;
+  if (!["connect-form", "application-form", "investigation-form", "close-form", "approval-form", "remediation-form", "artifact-form", "dependabot-form"].includes(form.id)) return;
   event.preventDefault();
   const payload = Object.fromEntries(new FormData(form));
   const submit = form.querySelector("button[type=submit]");
@@ -748,7 +786,19 @@ document.addEventListener("submit", async (event) => {
   submit.disabled = true; submit.textContent = "Saving…"; form.setAttribute("aria-busy", "true"); form.dataset.state = "submitting";
   $("form-error").hidden = true;
   try {
-    if (form.id === "connect-form") {
+    if (form.id === "remediation-form") {
+      const item = selectedInvestigation(); const snapshot = state.snapshots[0];
+      if (!item || !snapshot) throw new Error("Load an authorized snapshot first.");
+      const result = await api(`/api/investigations/${item.id}/remediation`, {method:"POST", body:JSON.stringify({request_key:crypto.randomUUID(), snapshot_id:snapshot.id, package:payload.package, versions:payload.versions.split(",").map(v=>v.trim()).filter(Boolean), max_attempts:2})});
+      $("modal").close(); await refreshData(true); announce(`Correction ${result.status}. Inspect its validation results.`);
+    } else if (form.id === "artifact-form") {
+      const item = selectedInvestigation();
+      await api(`/api/investigations/${item.id}/remediation/${form.dataset.job}/approve`, {method:"POST",body:JSON.stringify(payload)});
+      $("modal").close(); await refreshData(true); announce("Exact artifact approved.", "success");
+    } else if (form.id === "dependabot-form") {
+      const result = await api(`/api/applications/${payload.application_id}/dependabot/import`, {method:"POST",body:JSON.stringify({alert_number:Number(payload.alert_number)})});
+      $("modal").close(); state.selectedCase=result.investigation.id; state.operationView="case"; await refreshData(true); navigate("overview");
+    } else if (form.id === "connect-form") {
       state.token = payload.token; submit.textContent = "Connecting…";
       await refreshData(true); $("modal").close(); announce(state.database ? "Environment connected." : "API connected. The database is not ready yet.", state.database ? "success" : "");
     } else if (form.id === "close-form") {

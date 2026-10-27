@@ -13,7 +13,7 @@ def test_public_group_keys_join_runs_without_disclosing_internal_ids(monkeypatch
         "status": "started",
         "summary": "Reading.",
         "created_at": "2026-10-27T16:00:00Z",
-        "detail": {},
+        "detail": {"synthetic": True},
         "investigation_id": str(case_id),
     }
     rows = [
@@ -34,3 +34,5 @@ def test_public_group_keys_join_runs_without_disclosing_internal_ids(monkeypatch
         assert str(identifier) not in serialized
     assert "detail" not in result[0]
     assert "investigation_id" not in result[0]
+    rows.append({**common, "run_id": str(run_id), "detail": {}, "summary": "Private case"})
+    assert "Private case" not in json.dumps(traces.public_recent(settings))

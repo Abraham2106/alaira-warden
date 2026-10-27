@@ -96,6 +96,8 @@ def public_recent(settings, *, limit: int = 40) -> list[dict]:
     group_key = pepper.encode() if pepper else _PUBLIC_GROUP_SALT
     for row in recent(settings, limit=limit):
         detail = row.get("detail") or {}
+        if not detail.get("synthetic"):
+            continue
         kind = "run" if row.get("run_id") else "case"
         scope = row.get("run_id") or row["investigation_id"]
         # Permit grouping without publishing internal case, run or application IDs.

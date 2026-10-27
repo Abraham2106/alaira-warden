@@ -29,14 +29,24 @@ La validación visual y los flujos de interfaz se documentan en `docs/ui-scaffol
 
 La revisión visual de la navegación consolidada final no se pudo repetir después del cambio de cuenta: el navegador local quedó deshabilitado en los ajustes de Work. Las comprobaciones previas de escritorio/móvil corresponden a la versión anterior a la última consolidación; no acreditan por sí solas la disposición final de todas las etapas.
 
+## Incremento de bundles B1–B3
+
+Regresión final local: **97 pruebas aprobadas en 42,87 s**, sin omisiones, con PostgreSQL aislado `warden_test`, el rol efectivo `warden_app`, Docker real habilitado y prueba diferencial npm. Desglose: 19 del scaffold, 28 del ejecutor (6 con contenedores reales), 40 de correlación y 10 de orquestación PostgreSQL. Ruff check y format check aprobados, 54 archivos Python verificados. Son pruebas de estos componentes, no CA-01–CA-13 del producto integrado.
+
+El ejecutor prueba aislamiento, límites, cancelación, artefactos y limpieza con tareas sintéticas. Correlación incluye 224 combinaciones diferenciales npm y una medición separada de 10 000 componentes/20 ejecuciones: p95 0,8915 s. Orquestación prueba recuperación entre etapas, idempotencia, ámbito, cuotas conservadas, pausa/cancelación, exclusión concurrente, permisos SQL y descarte de resultados tardíos o sin evidencia. El fallo abrupto durante una etapa sigue pendiente de una prueba con terminación real del proceso.
+
+La imagen se reconstruye con Node/node-semver y el checkpointer oficial PostgreSQL. La migración 004 añade el ledger de control; el setup propietario prepara el esquema separado de checkpoints. Las migraciones 001–003 permanecen intactas. Los módulos son internos, sin nuevas rutas HTTP ni capacidades de ejecución expuestas mediante el token de desarrollo.
+
+Detalles, comandos y límites: `docs/bundle-execution.md`, `docs/bundle-correlation.md`, `docs/bundle-orchestration.md` y `docs/implementation-roadmap.md`. La integración de los cuatro frentes y la implementación B4–B7 siguen pendientes; los núcleos B1–B3 no equivalen al cierre de sus bundles completos.
+
 ## Planned — Implementación del MVP
 
 - Lectura real de GitHub, OSV, NVD y CISA KEV.
 - Inventario Syft y análisis Trivy/OSV-Scanner.
 - Contrato y llamadas reales de Meterless, NVIDIA y conectores condicionales.
-- Ejecutor de código de repositorios con aislamiento, red y presupuestos por trabajo.
+- Integración del ejecutor aislado con identidades, worker e imágenes de herramientas reales; red de instalación controlada.
 - Usuarios, autorización por proyecto y aprobación humana real.
-- Checkpoints/reanudación LangGraph, correlación y generación de parches.
+- Integración de checkpoints/reanudación y correlación con los frentes, persistencia de hallazgos y generación de parches.
 - Los criterios CA-01–CA-13 completos del SRS.
 
 La configuración de un secreto mantiene el adaptador como `not_implemented` y `verified: false`. No se han realizado llamadas a proveedores externos para acreditar integraciones que siguen pendientes.

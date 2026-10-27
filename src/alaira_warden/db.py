@@ -81,3 +81,7 @@ def migrate(directory: Path = Path("migrations"), settings: Settings | None = No
 
 if __name__ == "__main__":
     migrate()
+    # Both operations are explicit owner-side migrations, never API startup DDL.
+    from alaira_warden.orchestration.checkpoints import setup_checkpoints
+
+    setup_checkpoints(get_settings())

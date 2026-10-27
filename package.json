@@ -1,0 +1,9 @@
+{
+  "name": "alaira-warden-runtime-tools",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Authoritative npm range evaluation for the Python backend; no frontend build.",
+  "dependencies": {
+    "semver": "7.7.4"
+  }
+}

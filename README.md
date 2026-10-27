@@ -8,9 +8,11 @@ Scaffold del sistema multiagente de inteligencia y respuesta defensiva ante vuln
 
 - Python 3.12 y `uv` para desarrollo local.
 - Docker con su motor iniciado para PostgreSQL o para ejecutar toda la aplicación.
-- Un navegador; la interfaz utiliza HTML, CSS y JavaScript nativos y no requiere un proceso Node de compilación.
+- Node.js 22 y npm para el motor de rangos del backend. La interfaz usa HTML/CSS/JS nativos y no requiere compilación de frontend.
 
 Las dependencias Python se encuentran en `pyproject.toml`; `uv.lock` fija las versiones resueltas. Los componentes nuevos de implementación son open source. Los proveedores externos siguen el alcance acordado en el SRS.
+
+Los primeros incrementos añaden un ejecutor Docker offline interno, correlación determinista y una base de orquestación con checkpoints PostgreSQL, cuotas y controles persistentes. Son bibliotecas probadas; todavía no están expuestas como funciones operativas de la UI ni conectadas con los adaptadores pendientes. Evidencia y límites en [B1](docs/bundle-execution.md), [B2](docs/bundle-correlation.md) y [B3](docs/bundle-orchestration.md).
 
 ## Arranque con Docker
 
@@ -36,6 +38,7 @@ Completa primero `.env` como se indica arriba.
 
 ```powershell
 uv sync --frozen
+npm ci --ignore-scripts
 docker compose -f compose.yaml -f compose.dev.yaml up -d db
 uv run python -m alaira_warden.db
 uv run uvicorn alaira_warden.main:app --reload --host 127.0.0.1 --port 8000
@@ -70,6 +73,8 @@ src/alaira_warden/
   adapters.py             stubs que rechazan la invocación aunque haya credencial
   workflow.py             grafo inicial sin efectos externos
   observability.py        instrumentación FastAPI y exportación OTLP opcional
+  execution/              ejecución offline con límites y artefactos no confiables
+  correlation/            semántica npm/OSV y evaluación determinista de exposición
   static/                 interfaz inicial sin dependencias de frontend
 migrations/               cambios SQL versionados
 infra/                    inicialización PostgreSQL y configuración del colector
@@ -124,4 +129,7 @@ El token compartido identifica un único desarrollador local; no implementa usua
 - [Interfaz y flujo consolidado del MVP](docs/ui-scaffold.md)
 - [Estado de verificación](docs/verification.md)
 - [Aseguramiento de factibilidad y plan de entrega completa](docs/feasibility-assessment.md)
+- [Roadmap secuencial y prompts de los cuatro frentes](docs/implementation-roadmap.md)
+- [Bundle B1: ejecutor seguro](docs/bundle-execution.md)
+- [Bundle B2: correlación](docs/bundle-correlation.md)
 

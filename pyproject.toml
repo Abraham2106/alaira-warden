@@ -16,6 +16,8 @@ dependencies = [
   "opentelemetry-sdk>=1.29,<2",
   "opentelemetry-exporter-otlp-proto-http>=1.29,<2",
   "opentelemetry-instrumentation-fastapi>=0.50b0,<1",
+  "semantic-version>=2.10,<3",
+  "langgraph-checkpoint-postgres>=3,<4",
 ]
 
 [dependency-groups]
